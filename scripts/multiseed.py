@@ -23,7 +23,7 @@ from takeoff_pinn.training import run_experiment  # noqa: E402
 PARAMS = ("mu", "cd_scale", "eta", "kappa")
 REPORT = ("v_rmse_true", "x_rmse_true", "r_dyn_rms", "r_kin_rms", "t_liftoff_pred",
           "x_liftoff_pred", "ground_roll_pct_err", "liftoff_time_abs_err",
-          "x_liftoff_uq_std", "identifiability_max_corr", "runtime_s", "x_liftoff_oe",
+          "x_liftoff_sigma_param", "x_liftoff_sigma_total", "identifiability_max_corr", "runtime_s", "x_liftoff_oe",
           "val_pre_lbfgs", "val_post_lbfgs")
 
 
@@ -62,6 +62,11 @@ def summarize(rows: list[dict]) -> dict:
         if f"{p}_oe" in rows[0]:  # classical output-error estimate, same data
             err_oe = np.array([r[f"{p}_oe"] for r in rows]) - truth
             out[p]["rmse_oe"] = float(np.sqrt(np.mean(err_oe**2)))
+    if "x_liftoff_sigma_param" in rows[0]:
+        err = np.array([r["x_liftoff_pred"] - r["x_liftoff_true"] for r in rows])
+        sig = np.array([r["x_liftoff_sigma_param"] for r in rows])
+        out["x_liftoff_z"] = {"rmse": float(np.sqrt(np.mean(err**2))), "bias": float(err.mean()),
+                              "mean_sigma": float(sig.mean()), "z_std": float(np.std(err / sig))}
     return out
 
 

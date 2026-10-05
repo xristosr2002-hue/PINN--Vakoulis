@@ -122,6 +122,15 @@ class TrainConfig:
 
 
 @dataclass
+class UQConfig:
+    n_samples: int = 250
+    # Assumed run-to-run input variability for the *total* prediction interval
+    # (not estimated from data; set to 0 for parameter-only UQ). v1 hard-coded these.
+    sigma_rpm: float = 40.0        # rpm
+    sigma_headwind: float = 0.08   # m/s
+
+
+@dataclass
 class ExperimentConfig:
     name: str = "takeoff_pinn"
     out_dir: str = "results"
@@ -130,6 +139,7 @@ class ExperimentConfig:
     space: ParamSpace = field(default_factory=ParamSpace)
     data: DataConfig = field(default_factory=DataConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    uq: UQConfig = field(default_factory=UQConfig)
     data_csv: str | None = None
 
     @property

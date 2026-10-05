@@ -199,7 +199,9 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     cov = parameter_covariance(S, np.asarray(oe_info["residual_data"]),
                                weights=oe_info.get("weights"))
     uq = propagate_uncertainty(theta_hat, cov, names, exp.space, exp.physics,
-                               seed=exp.train.seed)
+                               n_samples=exp.uq.n_samples, seed=exp.train.seed,
+                               sigma_rpm=exp.uq.sigma_rpm,
+                               sigma_headwind=exp.uq.sigma_headwind)
 
     metrics["identifiability_condition_number"] = ident["condition_number"]
     metrics["identifiability_max_corr"] = ident["max_corr"]
@@ -208,8 +210,10 @@ def run_experiment(exp: ExperimentConfig) -> dict:
         metrics[f"{name}_sigma"] = float(sigma[j])
     grad = kappa_gradient(theta_hat, names, exp.physics)
     metrics["kappa_sigma"] = float(np.sqrt(max(grad @ cov @ grad, 0.0)))
-    metrics["x_liftoff_uq_mean"] = float(np.nanmean(uq["x_liftoff"]))
-    metrics["x_liftoff_uq_std"] = float(np.nanstd(uq["x_liftoff"]))
+    metrics["x_liftoff_sigma_param"] = float(np.nanstd(uq["x_liftoff_param"]))
+    metrics["t_liftoff_sigma_param"] = float(np.nanstd(uq["t_liftoff_param"]))
+    metrics["x_liftoff_sigma_total"] = float(np.nanstd(uq["x_liftoff"]))
+    metrics["x_liftoff_uq_no_event_frac"] = float(np.mean(~np.isfinite(uq["x_liftoff"])))
     metrics.update(diag)
     metrics["runtime_s"] = time.time() - t_start
 

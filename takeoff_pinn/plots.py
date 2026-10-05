@@ -58,15 +58,18 @@ def save_all(fit: dict, history: list, data: dict, uq: dict, run_dir: str,
         plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    finite = uq["x_liftoff"][np.isfinite(uq["x_liftoff"])]
-    if len(finite):
-        axes[0].hist(finite, bins=25, alpha=0.8)
+    for key, label in (("x_liftoff_param", "parameters only"),
+                       ("x_liftoff", "parameters + input variability")):
+        finite = uq[key][np.isfinite(uq[key])]
+        if len(finite):
+            axes[0].hist(finite, bins=25, alpha=0.6, label=label)
+            axes[0].legend(fontsize=8)
         axes[0].set(xlabel="ground roll to liftoff [m]", ylabel="count")
         axes[0].grid(True)
     axes[1].hist(uq["x_final"], bins=25, alpha=0.8)
     axes[1].set(xlabel="x(TF) [m]", ylabel="count")
     axes[1].grid(True)
-    fig.suptitle("Correlated parametric UQ (epistemic NN uncertainty excluded)")
+    fig.suptitle("Correlated UQ of the physics rollout (sandwich covariance)")
     fig.tight_layout()
     fig.savefig(os.path.join(run_dir, "uq.png"), dpi=140)
     plt.close(fig)

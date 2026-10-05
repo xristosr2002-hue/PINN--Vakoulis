@@ -32,3 +32,13 @@ def test_propagation_outputs_distributions():
     assert np.isfinite(out["x_liftoff"]).any()
     # near-zero covariance and no input noise -> near-deterministic outputs
     assert out["x_final"].std() < 0.5
+
+
+def test_parametric_and_total_spreads_are_separated():
+    """Same parameter samples; input variability can only add spread."""
+    sp = ParamSpace()
+    names = ["mu", "cd_scale", "eta"]
+    out = propagate_uncertainty(THETA, _tiny_cov(names), names, sp, PHYS,
+                                n_samples=32, seed=1, sigma_rpm=40.0, sigma_headwind=0.08)
+    assert out["x_liftoff_param"].shape == out["x_liftoff"].shape == (32,)
+    assert np.nanstd(out["x_liftoff_param"]) < np.nanstd(out["x_liftoff"])

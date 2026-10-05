@@ -3,8 +3,9 @@ propagate through the batched RK4 in one vectorized call.
 
 Replaces the audited scheme (independent hand-picked sigmas), which ignored the
 strong parameter correlations of this inverse problem (mu-eta corr ~ -0.9999).
-Epistemic network uncertainty is still NOT included; intervals are
-parametric-only lower bounds.
+Epistemic network uncertainty is NOT included (the liftoff prediction is a
+physics rollout with the identified parameters, so the network does not
+enter it).
 """
 import numpy as np
 
@@ -28,6 +29,12 @@ def propagate_uncertainty(theta: dict, cov: np.ndarray, names: list[str],
                           space: ParamSpace, phys: PhysicsConfig,
                           n_samples: int = 250, seed: int = 0,
                           sigma_rpm: float = 40.0, sigma_headwind: float = 0.08) -> dict:
+    """Two propagations of the SAME parameter samples (one batched RK4 call):
+    - *_param: parameter uncertainty only (what the data told us),
+    - total:   plus run-to-run input variability (rpm, headwind offsets), i.e.
+               a prediction interval for a repeat takeoff.
+    v1 reported only the mixture, which hid how little of the spread is
+    parametric in the slide scenario."""
     rng = np.random.default_rng(seed)
     samples = sample_correlated_params(theta, cov, names, space, n_samples, rng)
     full = {k: np.full(n_samples, theta[k]) for k in ("mu", "cd_scale", "cl_scale", "eta")}
@@ -37,7 +44,12 @@ def propagate_uncertainty(theta: dict, cov: np.ndarray, names: list[str],
     rpm_off = rng.normal(0.0, sigma_rpm, n_samples) if sigma_rpm > 0 else np.zeros(n_samples)
     hw_off = rng.normal(0.0, sigma_headwind, n_samples) if sigma_headwind > 0 else np.zeros(n_samples)
 
-    ev = predict_liftoff(full["mu"], full["cd_scale"], full["cl_scale"], full["eta"], phys,
-                         rpm_offset=rpm_off, headwind_offset=hw_off)
+    twice = {k: np.concatenate([v, v]) for k, v in full.items()}
+    zeros = np.zeros(n_samples)
+    ev = predict_liftoff(twice["mu"], twice["cd_scale"], twice["cl_scale"], twice["eta"], phys,
+                         rpm_offset=np.concatenate([zeros, rpm_off]),
+                         headwind_offset=np.concatenate([zeros, hw_off]))
+    n = n_samples
     return {"params": samples, "names": names,
-            "x_final": ev["x_TF"], "t_liftoff": ev["t"], "x_liftoff": ev["x"]}
+            "t_liftoff_param": ev["t"][:n], "x_liftoff_param": ev["x"][:n],
+            "t_liftoff": ev["t"][n:], "x_liftoff": ev["x"][n:], "x_final": ev["x_TF"][n:]}
