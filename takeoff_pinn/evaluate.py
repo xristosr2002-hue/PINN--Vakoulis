@@ -3,6 +3,7 @@ import numpy as np
 import torch
 
 from .config import PhysicsConfig, TrueParams
+from .identifiability import lumped_drag_coefficient
 from .losses import grad_wrt
 from .physics import rhs_accel
 
@@ -70,4 +71,8 @@ def compute_metrics(fit: dict, data: dict, truth: TrueParams | None, phys: Physi
         m[name] = fit[name]
         if truth is not None:
             m[f"{name}_abs_err"] = abs(fit[name] - getattr(truth, name))
+    m["kappa"] = lumped_drag_coefficient(fit["cd_scale"], fit["cl_scale"], fit["mu"], phys)
+    if truth is not None:
+        m["kappa_true"] = lumped_drag_coefficient(truth.cd_scale, truth.cl_scale, truth.mu, phys)
+        m["kappa_rel_err"] = abs(m["kappa"] - m["kappa_true"]) / abs(m["kappa_true"])
     return m

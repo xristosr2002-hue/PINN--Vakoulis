@@ -23,6 +23,28 @@ def test_estimating_cl_is_structurally_degenerate():
     assert abs(rep["corr"][i][j]) > 0.999
 
 
+def test_lumped_coefficient_kappa_is_the_degenerate_invariant():
+    """While N > 0 the quadratic-in-q resistance is qS*(CD0*cd - mu*CL0*cl):
+    lift *reduces* friction, so raising cl must be offset by raising cd.
+    Moving (cd, cl) at constant kappa leaves the trajectory unchanged; the
+    sign-flipped combination (as misprinted in the v1 audit/thesis) does not."""
+    from takeoff_pinn.data import integrate_rk4
+    from takeoff_pinn.identifiability import lumped_drag_coefficient
+
+    t = np.linspace(0.0, PHYS.TF, 401)
+    mu, cl_new = 0.08, 1.2
+    kappa0 = lumped_drag_coefficient(1.15, 1.0, mu, PHYS)
+    cd_new = (kappa0 + mu * PHYS.CL0 * cl_new) / PHYS.CD0
+    assert abs(lumped_drag_coefficient(cd_new, cl_new, mu, PHYS) - kappa0) < 1e-15
+
+    x0, _ = integrate_rk4(t, mu, 1.15, 1.0, 0.91, PHYS)
+    x1, _ = integrate_rk4(t, mu, cd_new, cl_new, 0.91, PHYS)
+    cd_wrong = (PHYS.CD0 * 1.15 + mu * PHYS.CL0 * (1.0 - cl_new)) / PHYS.CD0
+    x2, _ = integrate_rk4(t, mu, cd_wrong, cl_new, 0.91, PHYS)
+    assert float((x1 - x0).abs().max()) < 1e-3
+    assert float((x2 - x0).abs().max()) > 0.1
+
+
 def test_fixed_cl_removes_exact_degeneracy():
     """3-param set is invertible (cond ~4e2); 4-param set is rank-deficient (~7e5)."""
     t = _t_data()

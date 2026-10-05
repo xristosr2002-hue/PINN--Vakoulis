@@ -15,6 +15,13 @@ _BOUNDS_KEYS = {"mu": "mu_bounds", "cd_scale": "cd_bounds",
                 "cl_scale": "cl_bounds", "eta": "eta_bounds"}
 
 
+def lumped_drag_coefficient(cd_scale, cl_scale, mu, phys: PhysicsConfig):
+    """kappa = CD0*cd - mu*CL0*cl: the only data-identifiable combination of
+    (cd, cl) while N > 0, because the resistance is mu*W*cos(g) + q*S*kappa.
+    With cl fixed, the reported cd is conditional on that choice; kappa is not."""
+    return phys.CD0 * cd_scale - mu * phys.CL0 * cl_scale
+
+
 def free_parameter_names(space: ParamSpace) -> list[str]:
     names = ["mu", "cd_scale", "eta"]
     if space.estimate_cl:

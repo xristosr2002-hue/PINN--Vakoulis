@@ -31,3 +31,19 @@ def test_evaluate_model_shapes_and_keys():
     for k in ("t", "x", "V", "dVdt", "r_dyn", "r_kin", "mu", "cd_scale", "cl_scale", "eta"):
         assert k in fit
     assert len(fit["t"]) == 128 and np.isfinite(fit["r_dyn"]).all()
+
+
+def test_metrics_report_kappa_against_truth():
+    from takeoff_pinn.config import TrueParams
+    from takeoff_pinn.evaluate import compute_metrics
+
+    phys, truth = PhysicsConfig(), TrueParams()
+    t = np.linspace(0.0, phys.TF, 50)
+    fit = {"t": t, "x": t, "V": t, "r_dyn": 0 * t, "r_kin": 0 * t,
+           "mu": truth.mu, "cd_scale": truth.cd_scale, "cl_scale": truth.cl_scale,
+           "eta": truth.eta}
+    data = {"t_data": t, "x_data": t, "v_data": t}
+    m = compute_metrics(fit, data, truth, phys)
+    expected = phys.CD0 * truth.cd_scale - truth.mu * phys.CL0 * truth.cl_scale
+    assert abs(m["kappa_true"] - expected) < 1e-15
+    assert m["kappa_rel_err"] < 1e-15
