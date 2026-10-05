@@ -37,7 +37,7 @@ def test_predicted_liftoff_is_where_lift_equals_weight():
                              / (phys.rho * phys.S * phys.CL0 * tr.cl_scale))
     assert abs(v_air - v_air_expected) < 2e-3
     # slide scenario: the record (TF = 13.5 s) ends at liftoff
-    assert abs(ev["t"][0] - phys.TF) < 0.05
+    assert abs(ev["t"][0] - phys.TF) < 0.01
 
 
 def test_evaluate_model_shapes_and_keys():

@@ -23,7 +23,8 @@ from takeoff_pinn.training import run_experiment  # noqa: E402
 PARAMS = ("mu", "cd_scale", "eta", "kappa")
 REPORT = ("v_rmse_true", "x_rmse_true", "r_dyn_rms", "r_kin_rms", "t_liftoff_pred",
           "x_liftoff_pred", "ground_roll_pct_err", "liftoff_time_abs_err",
-          "x_liftoff_uq_std", "identifiability_max_corr", "runtime_s")
+          "x_liftoff_uq_std", "identifiability_max_corr", "runtime_s", "x_liftoff_oe",
+          "val_pre_lbfgs", "val_post_lbfgs")
 
 
 def apply_override(exp, assignment: str) -> None:
@@ -58,6 +59,9 @@ def summarize(rows: list[dict]) -> dict:
                   "mean_sigma": float(np.nanmean(sig)),
                   "z_std": float(np.nanstd(err / sig)),
                   "cover68": float(np.nanmean(np.abs(err / sig) < 1.0))}
+        if f"{p}_oe" in rows[0]:  # classical output-error estimate, same data
+            err_oe = np.array([r[f"{p}_oe"] for r in rows]) - truth
+            out[p]["rmse_oe"] = float(np.sqrt(np.mean(err_oe**2)))
     return out
 
 

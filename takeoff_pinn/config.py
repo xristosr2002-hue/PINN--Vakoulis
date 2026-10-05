@@ -21,12 +21,15 @@ class PhysicsConfig:
     # truth liftoff L = W*cos(gamma) occurs at the end of the 13.5 s record;
     # with v1's 56 N the aircraft is airborne at 7.9 s and the ground-roll ODE
     # would be integrated through ~6 s of flight. See experiments/LOG.md C4.
-    T_MAX: float = 45.5       # N, uninstalled static thrust at RPM_MAX
+    T_MAX: float = 45.44      # N, uninstalled static thrust at RPM_MAX (45.5 before C5)
     RPM_MAX: float = 5000.0
     V0: float = 0.0           # m/s
     X0: float = 0.0           # m
     TF: float = 13.5          # s, record length = ground-roll duration (slide)
-    NORMAL_SOFTNESS: float = 5.0  # N, softplus scale for smooth max(W*cos(g)-L, 0)
+    # N, softplus scale for smooth max(W*cos(g)-L, 0). Must be small against
+    # the net force near liftoff (~2.6 N): 5 N (v1) mis-stated N by up to
+    # 3.5 N there and spuriously broke the cd/cl degeneracy. See LOG C5.
+    NORMAL_SOFTNESS: float = 0.5
     FRICTION_SMOOTH_V: float = 0.5  # m/s, tanh scale making friction oppose motion
 
     @property

@@ -127,3 +127,43 @@ def test_covariance_is_symmetric_positive_semidefinite():
     assert cov.shape == (len(names), len(names))
     assert np.allclose(cov, cov.T)
     assert (np.linalg.eigvalsh(cov) > -1e-12).all()
+
+
+# ---- slide scenario (S = 5 m^2, TF = 13.5 s) -----------------------------
+
+SLIDE = PhysicsConfig()
+
+
+def test_slide_kappa_invariant_holds_until_liftoff():
+    """Same kappa => same trajectory while both vehicles are on the ground.
+    (A finite cl change moves the liftoff event itself, which is physics.)
+    With the v1 5 N softplus this held only to ~4e-3 m; with 0.5 N to ~3e-4 m."""
+    from takeoff_pinn.data import integrate_rk4
+    from takeoff_pinn.evaluate import predict_liftoff
+    from takeoff_pinn.identifiability import lumped_drag_coefficient
+
+    mu, cl_new = 0.08, 1.2
+    kappa0 = lumped_drag_coefficient(1.15, 1.0, mu, SLIDE)
+    cd_new = (kappa0 + mu * SLIDE.CL0 * cl_new) / SLIDE.CD0
+    t_end = predict_liftoff(mu, cd_new, cl_new, 0.91, SLIDE)["t"][0]  # earlier liftoff
+    t = np.linspace(0.0, t_end, 1001)
+    x0, _ = integrate_rk4(t, mu, 1.15, 1.0, 0.91, SLIDE)
+    x1, _ = integrate_rk4(t, mu, cd_new, cl_new, 0.91, SLIDE)
+    assert float((x1 - x0).abs().max()) < 1e-3
+
+
+def test_slide_lift_unloading_separates_mu_from_eta():
+    """At S = 5 m^2 lift unloads the wheels during the run, so mu*N varies in
+    time while eta*T is ~flat: corr(mu, eta) drops from -0.9999 (v1) to ~-0.87."""
+    t = np.linspace(0.0, SLIDE.TF, 160)
+    S, names = sensitivity_matrix(THETA, t, SLIDE, ParamSpace(), {"v": 13.0, "x": 113.0})
+    rep = identifiability_report(S, names)
+    assert abs(rep["corr"][names.index("mu")][names.index("eta")]) < 0.95
+
+
+def test_slide_cd_cl_still_degenerate_in_linearization():
+    t = np.linspace(0.0, SLIDE.TF, 160)
+    S, names = sensitivity_matrix(THETA, t, SLIDE, ParamSpace(estimate_cl=True),
+                                  {"v": 13.0, "x": 113.0})
+    rep = identifiability_report(S, names)
+    assert abs(rep["corr"][names.index("cd_scale")][names.index("cl_scale")]) > 0.9999

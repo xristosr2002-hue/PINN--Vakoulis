@@ -49,3 +49,6 @@ def test_run_experiment_smoke(tmp_path):
     # sandwich sigmas replace the v1 '*_gn_sigma' keys (which were 1.7x low).
     for key in ("mu_sigma", "cd_scale_sigma", "eta_sigma", "kappa_sigma"):
         assert key in m and m[key] > 0.0
+    # classical output-error baseline reported alongside the PINN
+    for key in ("mu_oe", "cd_scale_oe", "eta_oe", "kappa_oe", "x_liftoff_oe"):
+        assert key in m and np.isfinite(m[key])

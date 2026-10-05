@@ -12,9 +12,10 @@ import torch
 from .collocation import make_collocation, topk_residual_points
 from .config import ExperimentConfig, seed_everything
 from .data import load_csv, make_synthetic_data, train_val_split
-from .evaluate import compute_metrics, evaluate_model
+from .evaluate import compute_metrics, evaluate_model, predict_liftoff
 from .identifiability import (identifiability_report, kappa_gradient,
-                              parameter_covariance, sensitivity_matrix)
+                              lumped_drag_coefficient, parameter_covariance,
+                              sensitivity_matrix)
 from .losses import compute_loss, huber_mean
 from .model import TakeoffPINN
 from .oe import output_error_fit
@@ -75,6 +76,7 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig):
     print(f"restart {restart_id + 1}: OE init "
           f"mu={theta0['mu']:.5f} cd={theta0['cd_scale']:.4f} eta={theta0['eta']:.4f} "
           f"(loss={oe_info['loss']:.3e})")
+    oe_info["theta"] = theta0
     model = TakeoffPINN(phys, space, jitter=float(restart_id))
     _inject_theta(model, theta0)
 
@@ -109,12 +111,7 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig):
             t_phys = make_collocation(phys, tc, rng, extra)
 
         if epoch % tc.val_every == 0 or epoch == 1:
-            model.eval()
-            with torch.enable_grad():
-                _, vparts = compute_loss(model, t_val, x_val, v_val, t_phys,
-                                         None, phys, space, tc, scales)
-            score = (vparts["v_data"] + vparts["x_data"]
-                     + 0.10 * vparts["dyn"] + 0.10 * vparts["kin"])
+            score = val_score(model, t_val, x_val, v_val, t_phys, phys, space, tc, scales)
             if score < best_score:
                 best_score = score
                 best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
@@ -125,6 +122,8 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig):
     if best_state is not None:
         model.load_state_dict(best_state)
 
+    diag = {"val_pre_lbfgs": val_score(model, t_val, x_val, v_val, t_phys,
+                                       phys, space, tc, scales)}
     if tc.use_lbfgs:
         lbfgs = torch.optim.LBFGS(
             [p for p in model.parameters() if p.requires_grad],
@@ -144,13 +143,19 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig):
         except RuntimeError as err:
             print(f"L-BFGS stopped early: {err}")
 
+    final_score = val_score(model, t_val, x_val, v_val, t_phys, phys, space, tc, scales)
+    diag["val_post_lbfgs"] = final_score
+    return model, history, final_score, scales, oe_info, diag
+
+
+def val_score(model, t_val, x_val, v_val, t_phys, phys, space, tc, scales) -> float:
+    """Checkpoint-selection score at final (non-curriculum) weights."""
     model.eval()
     with torch.enable_grad():
         _, vparts = compute_loss(model, t_val, x_val, v_val, t_phys, None,
                                  phys, space, tc, scales)
-    final_score = (vparts["v_data"] + vparts["x_data"]
-                   + 0.10 * vparts["dyn"] + 0.10 * vparts["kin"])
-    return model, history, final_score, scales, oe_info
+    return (vparts["v_data"] + vparts["x_data"]
+            + 0.10 * vparts["dyn"] + 0.10 * vparts["kin"])
 
 
 def run_experiment(exp: ExperimentConfig) -> dict:
@@ -164,15 +169,26 @@ def run_experiment(exp: ExperimentConfig) -> dict:
 
     best = None
     for r in range(exp.train.n_restarts):
-        model, history, score, scales, oe_info = train_restart(r, data, exp)
-        print(f"restart {r + 1}/{exp.train.n_restarts}: val score = {score:.4e}")
+        model, history, score, scales, oe_info, diag = train_restart(r, data, exp)
+        print(f"restart {r + 1}/{exp.train.n_restarts}: val score = {score:.4e} "
+              f"(before L-BFGS {diag['val_pre_lbfgs']:.4e})")
         if best is None or score < best[2]:
-            best = (model, history, score, scales, oe_info)
-    model, history, score, scales, oe_info = best
+            best = (model, history, score, scales, oe_info, diag)
+    model, history, score, scales, oe_info, diag = best
 
     fit = evaluate_model(model, exp.physics)
     truth = exp.truth if exp.data_csv is None else None
     metrics = compute_metrics(fit, data, truth, exp.physics)
+    # Classical output-error baseline on the same data: does the PINN stage
+    # add anything to the parameters / takeoff prediction beyond its initializer?
+    th_oe = oe_info["theta"]
+    for k in ("mu", "cd_scale", "eta"):
+        metrics[f"{k}_oe"] = th_oe[k]
+    metrics["kappa_oe"] = lumped_drag_coefficient(th_oe["cd_scale"], th_oe["cl_scale"],
+                                                  th_oe["mu"], exp.physics)
+    ev_oe = predict_liftoff(th_oe["mu"], th_oe["cd_scale"], th_oe["cl_scale"], th_oe["eta"],
+                            exp.physics)
+    metrics["t_liftoff_oe"], metrics["x_liftoff_oe"] = float(ev_oe["t"][0]), float(ev_oe["x"][0])
 
     theta_hat = {k: fit[k] for k in ("mu", "cd_scale", "cl_scale", "eta")}
     # Sensitivities at exactly the samples whose residuals estimate the noise
@@ -194,6 +210,7 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     metrics["kappa_sigma"] = float(np.sqrt(max(grad @ cov @ grad, 0.0)))
     metrics["x_liftoff_uq_mean"] = float(np.nanmean(uq["x_liftoff"]))
     metrics["x_liftoff_uq_std"] = float(np.nanstd(uq["x_liftoff"]))
+    metrics.update(diag)
     metrics["runtime_s"] = time.time() - t_start
 
     run_dir = exp.run_dir
