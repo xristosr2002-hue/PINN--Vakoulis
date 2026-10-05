@@ -45,7 +45,7 @@ def main(argv=None) -> int:
 
     results = run_experiment(exp)
     save_all(results["fit"], results["history"], results["data"], results["uq"],
-             results["run_dir"], exp.physics.V_LIFTOFF)
+             results["run_dir"], results["metrics"]["t_liftoff_pred"])
 
     print(json.dumps({k: v for k, v in results["metrics"].items()
                       if isinstance(v, (int, float))}, indent=2))

@@ -4,22 +4,52 @@ import torch
 
 from .config import PhysicsConfig, TrueParams
 from .identifiability import lumped_drag_coefficient
+from .data import integrate_rk4
 from .losses import grad_wrt
-from .physics import rhs_accel
+from .physics import normal_force_margin, rhs_accel
 
 
-def first_crossing(t, x, v, threshold: float):
-    t, x, v = (np.asarray(a, dtype=float) for a in (t, x, v))
-    idx = np.where(v >= threshold)[0]
+def first_event(t, x, g):
+    """First time the event function g drops to <= 0 (from > 0), with linear
+    interpolation of t and x; (nan, nan) if it never does on the grid."""
+    t, x, g = (np.asarray(a, dtype=float) for a in (t, x, g))
+    idx = np.where(g <= 0.0)[0]
     if len(idx) == 0:
         return float("nan"), float("nan")
     j = int(idx[0])
     if j == 0:
         return float(t[0]), float(x[0])
-    frac = float((threshold - v[j - 1]) / (v[j] - v[j - 1] + 1e-15))
-    frac = float(np.clip(frac, 0.0, 1.0))
+    frac = float(np.clip(g[j - 1] / (g[j - 1] - g[j]), 0.0, 1.0))
     return (float(t[j - 1] + frac * (t[j] - t[j - 1])),
             float(x[j - 1] + frac * (x[j] - x[j - 1])))
+
+
+def predict_liftoff(mu, cd_scale, cl_scale, eta, phys: PhysicsConfig,
+                    rpm_offset=0.0, headwind_offset=0.0, horizon: float = 2.0,
+                    dt: float = 0.01) -> dict:
+    """Liftoff (L = W*cos(gamma)) by forward RK4 with the given parameters,
+    integrated up to horizon*TF so events after the record end are still
+    found. Batched over parameter sets; returns arrays of t, x, V at liftoff
+    and x at TF."""
+    t = np.linspace(0.0, horizon * phys.TF, int(round(horizon * phys.TF / dt)) + 1)
+    batch = [torch.as_tensor(np.atleast_1d(np.asarray(a, dtype=float)))
+             for a in (mu, cd_scale, cl_scale, eta, rpm_offset, headwind_offset)]
+    B = max(b.numel() for b in batch)
+    mu_b, cd_b, cl_b, eta_b, rpm_b, hw_b = (b.expand(B) if b.numel() == 1 else b for b in batch)
+    x, v = integrate_rk4(t, mu_b, cd_b, cl_b, eta_b, phys,
+                         rpm_offset=rpm_b, headwind_offset=hw_b)
+    with torch.no_grad():
+        margin = normal_force_margin(torch.as_tensor(t).reshape(1, -1), v,
+                                     cl_b.reshape(-1, 1), phys,
+                                     headwind_offset=hw_b.reshape(-1, 1)).numpy()
+    x_np, v_np = x.numpy(), v.numpy()
+    out = {"t": np.full(B, np.nan), "x": np.full(B, np.nan), "V": np.full(B, np.nan)}
+    for i in range(B):
+        out["t"][i], out["x"][i] = first_event(t, x_np[i], margin[i])
+        if np.isfinite(out["t"][i]):
+            out["V"][i] = np.interp(out["t"][i], t, v_np[i])
+    out["x_TF"] = np.array([np.interp(phys.TF, t, xi) for xi in x_np])
+    return out
 
 
 def evaluate_model(model, phys: PhysicsConfig, n: int = 1000) -> dict:
@@ -58,15 +88,24 @@ def compute_metrics(fit: dict, data: dict, truth: TrueParams | None, phys: Physi
     m["r_dyn_rms"] = float(np.sqrt(np.mean(fit["r_dyn"] ** 2)))
     m["r_kin_rms"] = float(np.sqrt(np.mean(fit["r_kin"] ** 2)))
 
-    tl, xl = first_crossing(fit["t"], fit["x"], fit["V"], phys.V_LIFTOFF)
-    m["t_liftoff_pred"], m["x_liftoff_pred"] = tl, xl
-    if data.get("v_true") is not None:
-        tlt, xlt = first_crossing(data["t_dense"], data["x_true"], data["v_true"], phys.V_LIFTOFF)
-        m["t_liftoff_true"], m["x_liftoff_true"] = tlt, xlt
-        if np.isfinite(tl) and np.isfinite(tlt):
-            m["liftoff_time_abs_err"] = abs(tl - tlt)
-            m["ground_roll_abs_err"] = abs(xl - xlt)
-            m["ground_roll_pct_err"] = 100.0 * abs(xl - xlt) / max(abs(xlt), 1e-9)
+    # Liftoff = first L >= W*cos(gamma). Predicted by forward integration with
+    # the identified parameters (the network only spans the record [0, TF]);
+    # the network-state event inside the record is reported as a diagnostic.
+    with torch.no_grad():
+        margin_net = normal_force_margin(torch.as_tensor(fit["t"]), torch.as_tensor(fit["V"]),
+                                         fit["cl_scale"], phys).numpy()
+    m["t_liftoff_net"] = first_event(fit["t"], fit["x"], margin_net)[0]
+    pred = predict_liftoff(fit["mu"], fit["cd_scale"], fit["cl_scale"], fit["eta"], phys)
+    m["t_liftoff_pred"], m["x_liftoff_pred"], m["v_liftoff_pred"] = (
+        float(pred[k][0]) for k in ("t", "x", "V"))
+    if truth is not None:
+        ref = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys)
+        m["t_liftoff_true"], m["x_liftoff_true"], m["v_liftoff_true"] = (
+            float(ref[k][0]) for k in ("t", "x", "V"))
+        if np.isfinite(m["t_liftoff_pred"]) and np.isfinite(m["t_liftoff_true"]):
+            m["liftoff_time_abs_err"] = abs(m["t_liftoff_pred"] - m["t_liftoff_true"])
+            m["ground_roll_abs_err"] = abs(m["x_liftoff_pred"] - m["x_liftoff_true"])
+            m["ground_roll_pct_err"] = 100.0 * m["ground_roll_abs_err"] / abs(m["x_liftoff_true"])
     for name in ("mu", "cd_scale", "cl_scale", "eta"):
         m[name] = fit[name]
         if truth is not None:

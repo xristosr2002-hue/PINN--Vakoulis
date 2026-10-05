@@ -6,6 +6,16 @@ from .config import DataConfig, PhysicsConfig, TrueParams
 from .physics import accel_from_inputs, exogenous_inputs
 
 
+RK4_MAX_DT = 0.02  # s; resolves the ~17 ms rpm blend (4th-order regime, see tests)
+
+
+def fine_grid(t_eval, t_end: float) -> np.ndarray:
+    """Uniform grid with step <= RK4_MAX_DT on [0, t_end], merged with the
+    evaluation times so outputs are read at integration nodes (no interpolation)."""
+    n = int(np.ceil(t_end / RK4_MAX_DT - 1e-9)) + 1
+    return np.union1d(np.asarray(t_eval, dtype=float), np.linspace(0.0, t_end, n))
+
+
 def _as_batch(value) -> torch.Tensor:
     t = torch.as_tensor(value, dtype=torch.get_default_dtype())
     return t.reshape(-1)
@@ -67,13 +77,14 @@ def make_synthetic_data(phys: PhysicsConfig, truth: TrueParams, dcfg: DataConfig
     x_t, v_t = integrate_rk4(t_dense, truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys)
     x_true, v_true = x_t[0].numpy(), v_t[0].numpy()
 
-    n1 = int(0.45 * dcfg.n_data)
-    n2 = int(0.35 * dcfg.n_data)
+    n1 = int(dcfg.strata_shares[0] * dcfg.n_data)
+    n2 = int(dcfg.strata_shares[1] * dcfg.n_data)
     n3 = dcfg.n_data - n1 - n2
+    e1, e2 = (f * phys.TF for f in dcfg.strata_edges)
     t_data = np.unique(np.concatenate([
-        rng.uniform(0.0, 3.0, n1),
-        rng.uniform(3.0, 6.8, n2),
-        rng.uniform(6.8, phys.TF, n3),
+        rng.uniform(0.0, e1, n1),
+        rng.uniform(e1, e2, n2),
+        rng.uniform(e2, phys.TF, n3),
         [0.0, phys.TF],
     ]))
     x_data = np.interp(t_data, t_dense, x_true) + rng.normal(0.0, dcfg.sigma_x, t_data.shape)

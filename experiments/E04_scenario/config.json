@@ -1,0 +1,97 @@
+{
+  "name": "E04_scenario",
+  "out_dir": "results",
+  "physics": {
+    "m": 15.0,
+    "g": 9.80665,
+    "rho": 1.225,
+    "S": 5.0,
+    "CD0": 0.055,
+    "CL0": 0.28,
+    "T_MAX": 45.5,
+    "RPM_MAX": 5000.0,
+    "V0": 0.0,
+    "X0": 0.0,
+    "TF": 13.5,
+    "NORMAL_SOFTNESS": 5.0,
+    "FRICTION_SMOOTH_V": 0.5
+  },
+  "truth": {
+    "mu": 0.08,
+    "cd_scale": 1.15,
+    "cl_scale": 1.0,
+    "eta": 0.91
+  },
+  "space": {
+    "mu_bounds": [
+      0.02,
+      0.16
+    ],
+    "cd_bounds": [
+      0.6,
+      1.7
+    ],
+    "cl_bounds": [
+      0.7,
+      1.25
+    ],
+    "eta_bounds": [
+      0.75,
+      1.05
+    ],
+    "prior_mu": 0.09,
+    "prior_cd": 1.0,
+    "prior_cl": 1.0,
+    "prior_eta": 0.93,
+    "prior_sigma_mu": 0.035,
+    "prior_sigma_cd": 0.35,
+    "prior_sigma_cl": 0.25,
+    "prior_sigma_eta": 0.1,
+    "estimate_cl": false
+  },
+  "data": {
+    "n_data": 160,
+    "sigma_v": 0.1,
+    "sigma_x": 0.08,
+    "n_dense": 1000,
+    "strata_edges": [
+      0.375,
+      0.85
+    ],
+    "strata_shares": [
+      0.45,
+      0.35
+    ]
+  },
+  "train": {
+    "seed": 7,
+    "n_restarts": 2,
+    "pretrain_epochs": 900,
+    "epochs_adam": 2200,
+    "lr": 0.0012,
+    "lr_phys": 0.0002,
+    "weight_decay": 1e-06,
+    "grad_clip": 20.0,
+    "use_lbfgs": true,
+    "lbfgs_max_iter": 160,
+    "n_collocation": 128,
+    "resample_epochs": [
+      600,
+      1300,
+      1900
+    ],
+    "n_resample_add": 40,
+    "w_v": 1.0,
+    "w_x": 1.0,
+    "w_dyn": 3.0,
+    "w_kin": 3.0,
+    "w_prior_start": 0.0,
+    "w_prior_end": 0.0,
+    "prior_decay_tau": 1400.0,
+    "ramp_center": 500.0,
+    "ramp_width": 180.0,
+    "val_every": 25,
+    "oe_max_nfev": 300
+  },
+  "data_csv": null
+}

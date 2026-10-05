@@ -9,7 +9,13 @@ from takeoff_pinn.config import (
 def test_physics_derived_quantities():
     phys = PhysicsConfig()
     assert abs(phys.W - 15.0 * 9.80665) < 1e-12
-    assert abs(phys.a_scale - 56.0 / 15.0) < 1e-12  # T_MAX/m, NOT rpm/60
+    assert abs(phys.a_scale - phys.T_MAX / 15.0) < 1e-12  # T_MAX/m, NOT rpm/60
+
+
+def test_slide_specification_values():
+    """Project brief (slide): S = 5 m^2, m = 15 kg, rho = 1.225, 5000 RPM, 13.5 s."""
+    phys = PhysicsConfig()
+    assert (phys.S, phys.m, phys.rho, phys.RPM_MAX, phys.TF) == (5.0, 15.0, 1.225, 5000.0, 13.5)
 
 
 def test_config_save_roundtrip(tmp_path):
@@ -17,7 +23,8 @@ def test_config_save_roundtrip(tmp_path):
     p = exp.save()
     blob = json.loads(open(p, encoding="utf-8").read())
     assert blob["train"]["seed"] == exp.train.seed
-    assert blob["physics"]["T_MAX"] == 56.0
+    assert blob["physics"]["T_MAX"] == exp.physics.T_MAX
+    assert blob["data"]["strata_edges"] == list(exp.data.strata_edges)
 
 
 def test_seed_everything_reproducible():

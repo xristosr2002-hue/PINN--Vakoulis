@@ -10,20 +10,24 @@ import torch
 
 @dataclass
 class PhysicsConfig:
+    # Slide specification (project brief): m, S, rho, RPM_MAX and the 13.5 s run.
     m: float = 15.0           # kg
     g: float = 9.80665        # m/s^2
     rho: float = 1.225        # kg/m^3
-    S: float = 0.55           # m^2
+    S: float = 5.0            # m^2  (v1 used 0.55, contradicting the brief)
     CD0: float = 0.055        # nominal ground-roll drag coefficient
-    CL0: float = 0.28         # nominal ground-effect lift coefficient
-    T_MAX: float = 56.0       # N, uninstalled thrust at RPM_MAX
+    CL0: float = 0.28         # nominal ground-attitude (ground-effect) lift coefficient
+    # Not on the slide. Calibrated (user decision, 2026-10-05) so that the
+    # truth liftoff L = W*cos(gamma) occurs at the end of the 13.5 s record;
+    # with v1's 56 N the aircraft is airborne at 7.9 s and the ground-roll ODE
+    # would be integrated through ~6 s of flight. See experiments/LOG.md C4.
+    T_MAX: float = 45.5       # N, uninstalled static thrust at RPM_MAX
     RPM_MAX: float = 5000.0
     V0: float = 0.0           # m/s
     X0: float = 0.0           # m
-    TF: float = 8.0           # s
+    TF: float = 13.5          # s, record length = ground-roll duration (slide)
     NORMAL_SOFTNESS: float = 5.0  # N, softplus scale for smooth max(W*cos(g)-L, 0)
     FRICTION_SMOOTH_V: float = 0.5  # m/s, tanh scale making friction oppose motion
-    V_LIFTOFF: float = 11.0   # m/s, performance *proxy* threshold (not aerodynamic liftoff)
 
     @property
     def W(self) -> float:
@@ -74,6 +78,11 @@ class DataConfig:
     sigma_v: float = 0.10   # m/s
     sigma_x: float = 0.08   # m
     n_dense: int = 1000     # dense truth grid
+    # Stratified sampling, denser over spool-up/excitation and near liftoff:
+    # fractions of TF bounding three strata, and the share of samples in the
+    # first two (v1 hard-coded 3.0 s / 6.8 s, i.e. these fractions of TF = 8).
+    strata_edges: tuple = (0.375, 0.85)
+    strata_shares: tuple = (0.45, 0.35)
 
 
 @dataclass

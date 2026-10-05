@@ -57,5 +57,36 @@ Format per Rule 6: CHANGE / WHY / EXPECTED EFFECT / ACTUAL EFFECT / DECISION.
   Empirical OE RMSE: μ 0.0249, c_D 0.0628, η 0.0662 (bias −0.005 / −0.001 / −0.015, all < 0.25 RMSE).
   Full preset (seed 7): estimates unchanged. σ = 0.0225 / 0.0534 / 0.0600, κ σ = 0.0084.
   z = −0.18 / 0.63 / −0.19 and κ z = 0.36. UQ σ(x_LOF) 0.497 → 0.513 m. Tests 44/44.
-- **DECISION:** Keep. The E00 "all within 1σ" claim still holds, but with σ that are 1.7× larger than
-  the ones printed in v1.
+- **DECISION:** Keep. The E00 "all within 1σ" claim still holds, with honest σ about 1.3× the thesis values
+  and 1.7× the values the v1 code printed.
+
+---
+
+## C4 / E04 — Slide scenario: S = 5 m², TF = 13.5 s, physical liftoff (user decision + Agent 2)
+
+- **CHANGE:** `PhysicsConfig` gets S = 5.0, TF = 13.5 and T_MAX = 45.5 N (recalibrated; user chose this
+  option out of T_MAX / C_L0 / C_D0 / shortening the window). The arbitrary `V_LIFTOFF = 11 m/s` proxy is
+  replaced by the physical event **L ≥ W·cosγ** at ground attitude (`physics.normal_force_margin`).
+  Liftoff is predicted by forward RK4 with the identified parameters up to 2·TF
+  (`evaluate.predict_liftoff`, also used by UQ). Data strata are fractions of TF (identical at TF = 8).
+  The RK4 fine grid uses dt ≤ 0.02 s (`data.fine_grid`; 401 points at TF = 8, as before).
+- **WHY:** The brief specifies S = 5 m² and a 13.5 s run. With v1's other values, L = W at 7.9 s, so the
+  ground-roll ODE would integrate about 6 s of flight with L up to 1.28·W. At S = 5 the 11 m/s proxy
+  has no physical meaning: V_stall(C_Lmax = 1.2) = 6.3 m/s, and at S = 0.55 the proxy lay below stall.
+- **EXPECTED:** A physically consistent ground roll that ends at liftoff ≈ 13.5 s, and different
+  identifiability (lift unloads the wheels, so friction now varies in time).
+- **ACTUAL (seed 7, full preset; `E04_scenario/metrics.json`):**
+  truth liftoff t = 13.498 s, x = 113.62 m, V = 13.13 m/s.
+  V-RMSE 0.0121 m/s, x-RMSE 0.0389 m (noise 0.10 / 0.08). r_dyn RMS 0.0090 m/s², r_kin RMS 0.0089 m/s.
+  μ 0.0781 ± 0.0179, c_D 1.1437 ± 0.0774, η 0.9028 ± 0.0583, **κ 0.04104 ± 0.00079 (truth 0.04085, 0.47 %)**.
+  Max sensitivity correlation 0.875 (E00: 0.9999); μ–η correlation 0.936.
+  Predicted liftoff 13.580 s / 114.51 m (error 0.082 s / 0.79 %). UQ σ(x_LOF) = 5.6 m, dominated by
+  the near-terminal approach to liftoff (net force about 2.6 N at liftoff). Runtime 79 s.
+- **Side findings → new changes:**
+  (i) The κ degeneracy is broken by 0.32 m, but only through the 5 N softplus smoothing of
+  max(W − L, 0), which is not physics → C5.
+  (ii) The `quick` preset under-fits the longer record (x-RMSE 2.5 m), and the PINN stage then moves θ
+  *away* from the OE estimate. The smoke-test threshold became a mechanics check (documented).
+  Test suite runtime rose to 173 s because of the UQ rollout horizon.
+- **DECISION:** Keep. E04 is the reference for all later slide-scenario changes. The v1 identifiability
+  facts are pinned to an explicit legacy config in the tests.

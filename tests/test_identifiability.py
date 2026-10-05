@@ -6,7 +6,10 @@ from takeoff_pinn.identifiability import (
     gauss_newton_covariance, identifiability_report, sensitivity_matrix,
 )
 
-PHYS, TRUTH = PhysicsConfig(), TrueParams()
+# The facts below were established for the v1 scenario (S = 0.55 m^2, 8 s,
+# 56 N), where W - L stays >> NORMAL_SOFTNESS. They are pinned to that
+# configuration explicitly; slide-scenario identifiability is tested separately.
+PHYS, TRUTH = PhysicsConfig(S=0.55, TF=8.0, T_MAX=56.0), TrueParams()
 THETA = {"mu": 0.08, "cd_scale": 1.15, "cl_scale": 1.0, "eta": 0.91}
 SCALES = {"v": 14.0, "x": 70.0}
 

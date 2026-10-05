@@ -2,26 +2,42 @@ import numpy as np
 import torch
 
 from takeoff_pinn.config import ParamSpace, PhysicsConfig
-from takeoff_pinn.evaluate import evaluate_model, first_crossing
+from takeoff_pinn.evaluate import evaluate_model, first_event
 from takeoff_pinn.model import TakeoffPINN
 
 torch.set_default_dtype(torch.float64)
 
 
-def test_first_crossing_linear_interpolation_exact():
+def test_first_event_linear_interpolation_exact():
     t = np.array([0.0, 1.0, 2.0])
-    v = np.array([0.0, 10.0, 20.0])
+    g = np.array([10.0, 5.0, -5.0])
     x = np.array([0.0, 5.0, 20.0])
-    tc, xc = first_crossing(t, x, v, threshold=15.0)
+    tc, xc = first_event(t, x, g)
     assert abs(tc - 1.5) < 1e-12 and abs(xc - 12.5) < 1e-12
 
 
-def test_first_crossing_no_event_is_nan():
+def test_first_event_no_event_is_nan():
     t = np.array([0.0, 1.0])
-    v = np.array([0.0, 1.0])
-    x = np.array([0.0, 0.5])
-    tc, xc = first_crossing(t, x, v, threshold=99.0)
+    tc, xc = first_event(t, np.array([0.0, 0.5]), np.array([3.0, 1.0]))
     assert np.isnan(tc) and np.isnan(xc)
+
+
+def test_predicted_liftoff_is_where_lift_equals_weight():
+    """At the event, 0.5*rho*V_air^2*S*CL0*cl = W*cos(gamma) (ground attitude)."""
+    from takeoff_pinn.config import TrueParams
+    from takeoff_pinn.evaluate import predict_liftoff
+    from takeoff_pinn.physics import exogenous_inputs
+
+    phys, tr = PhysicsConfig(), TrueParams()
+    ev = predict_liftoff(tr.mu, tr.cd_scale, tr.cl_scale, tr.eta, phys)
+    t_lof = torch.tensor([ev["t"][0]])
+    _, hw, gamma = exogenous_inputs(t_lof, phys)
+    v_air = ev["V"][0] + float(hw)
+    v_air_expected = np.sqrt(2 * phys.W * np.cos(float(gamma))
+                             / (phys.rho * phys.S * phys.CL0 * tr.cl_scale))
+    assert abs(v_air - v_air_expected) < 2e-3
+    # slide scenario: the record (TF = 13.5 s) ends at liftoff
+    assert abs(ev["t"][0] - phys.TF) < 0.05
 
 
 def test_evaluate_model_shapes_and_keys():

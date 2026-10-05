@@ -8,7 +8,7 @@ import numpy as np
 
 
 def save_all(fit: dict, history: list, data: dict, uq: dict, run_dir: str,
-             v_liftoff: float) -> None:
+             t_liftoff: float) -> None:
     os.makedirs(run_dir, exist_ok=True)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -16,7 +16,9 @@ def save_all(fit: dict, history: list, data: dict, uq: dict, run_dir: str,
     axes[0].scatter(data["t_data"], data["v_data"], s=10, alpha=0.45, label="data")
     if data.get("v_true") is not None:
         axes[0].plot(data["t_dense"], data["v_true"], "--", label="truth")
-    axes[0].axhline(v_liftoff, ls="-.", lw=0.8, label="V_liftoff proxy")
+    for ax in axes:
+        if np.isfinite(t_liftoff):
+            ax.axvline(t_liftoff, ls="-.", lw=0.8, color="k", label="predicted liftoff (L = W cos γ)")
     axes[0].set(xlabel="t [s]", ylabel="V [m/s]")
     axes[0].legend()
     axes[0].grid(True)
@@ -59,7 +61,7 @@ def save_all(fit: dict, history: list, data: dict, uq: dict, run_dir: str,
     finite = uq["x_liftoff"][np.isfinite(uq["x_liftoff"])]
     if len(finite):
         axes[0].hist(finite, bins=25, alpha=0.8)
-        axes[0].set(xlabel="ground roll to V_liftoff [m]", ylabel="count")
+        axes[0].set(xlabel="ground roll to liftoff [m]", ylabel="count")
         axes[0].grid(True)
     axes[1].hist(uq["x_final"], bins=25, alpha=0.8)
     axes[1].set(xlabel="x(TF) [m]", ylabel="count")

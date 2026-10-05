@@ -7,11 +7,9 @@ Epistemic network uncertainty is still NOT included; intervals are
 parametric-only lower bounds.
 """
 import numpy as np
-import torch
 
 from .config import ParamSpace, PhysicsConfig
-from .data import integrate_rk4
-from .evaluate import first_crossing
+from .evaluate import predict_liftoff
 from .identifiability import _BOUNDS_KEYS
 
 
@@ -39,19 +37,7 @@ def propagate_uncertainty(theta: dict, cov: np.ndarray, names: list[str],
     rpm_off = rng.normal(0.0, sigma_rpm, n_samples) if sigma_rpm > 0 else np.zeros(n_samples)
     hw_off = rng.normal(0.0, sigma_headwind, n_samples) if sigma_headwind > 0 else np.zeros(n_samples)
 
-    t_grid = np.linspace(0.0, phys.TF, 600)
-    x, v = integrate_rk4(t_grid,
-                         torch.as_tensor(full["mu"]), torch.as_tensor(full["cd_scale"]),
-                         torch.as_tensor(full["cl_scale"]), torch.as_tensor(full["eta"]),
-                         phys,
-                         rpm_offset=torch.as_tensor(rpm_off),
-                         headwind_offset=torch.as_tensor(hw_off))
-    x_np, v_np = x.numpy(), v.numpy()
-
-    t_lift = np.full(n_samples, np.nan)
-    x_lift = np.full(n_samples, np.nan)
-    for i in range(n_samples):
-        t_lift[i], x_lift[i] = first_crossing(t_grid, x_np[i], v_np[i], phys.V_LIFTOFF)
-
+    ev = predict_liftoff(full["mu"], full["cd_scale"], full["cl_scale"], full["eta"], phys,
+                         rpm_offset=rpm_off, headwind_offset=hw_off)
     return {"params": samples, "names": names,
-            "x_final": x_np[:, -1], "t_liftoff": t_lift, "x_liftoff": x_lift}
+            "x_final": ev["x_TF"], "t_liftoff": ev["t"], "x_liftoff": ev["x"]}

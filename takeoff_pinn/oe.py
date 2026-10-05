@@ -4,7 +4,7 @@ import torch
 from scipy.optimize import least_squares
 
 from .config import ParamSpace, PhysicsConfig, TrainConfig
-from .data import integrate_rk4
+from .data import fine_grid, integrate_rk4
 from .identifiability import _BOUNDS_KEYS, free_parameter_names
 
 _PRIOR_KEYS = {"mu": "prior_mu", "cd_scale": "prior_cd",
@@ -22,7 +22,7 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
     # Integrating on the raw (gappy) data grid -- as the legacy OE stage did --
     # injects O(dt^4) RK4 error larger than the parameter effects being fitted,
     # which biases the estimate along the mu-eta valley.
-    t_fine = np.union1d(t_np, np.linspace(0.0, phys.TF, 401))
+    t_fine = fine_grid(t_np, phys.TF)
 
     v_scale = max(1.0, float(np.nanmax(np.abs(v_np))))
     x_scale = max(1.0, float(np.nanmax(np.abs(x_np))))

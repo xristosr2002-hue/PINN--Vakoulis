@@ -57,6 +57,24 @@ def smooth_normal(w_eff: torch.Tensor, lift: torch.Tensor, softness: float) -> t
     return F.softplus((w_eff - lift) / softness) * softness
 
 
+def normal_force_margin(
+    t: torch.Tensor,
+    V: torch.Tensor,
+    cl_scale: torch.Tensor | float,
+    cfg: PhysicsConfig,
+    headwind_offset: torch.Tensor | float = 0.0,
+) -> torch.Tensor:
+    """W*cos(gamma) - L at ground attitude: > 0 while the wheels carry load.
+
+    Liftoff is the first time this reaches 0 (no rotation manoeuvre is
+    modelled, so lift uses the ground-attitude C_L0). Beyond it the 1-D
+    ground-roll equation no longer describes the vehicle."""
+    _, headwind, gamma = exogenous_inputs(t, cfg)
+    v_air = torch.clamp(V + headwind + headwind_offset, min=0.0)
+    lift = 0.5 * cfg.rho * v_air**2 * cfg.S * cfg.CL0 * cl_scale
+    return cfg.W * torch.cos(gamma) - lift
+
+
 def exogenous_inputs(t: torch.Tensor, cfg: PhysicsConfig):
     """Time-only inputs (rpm, headwind, runway angle gamma). Separated from the
     state-dependent forces so integrators can evaluate them once per grid."""

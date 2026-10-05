@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from .config import ParamSpace, PhysicsConfig
-from .data import integrate_rk4
+from .data import fine_grid, integrate_rk4
 
 _BOUNDS_KEYS = {"mu": "mu_bounds", "cd_scale": "cd_bounds",
                 "cl_scale": "cl_bounds", "eta": "eta_bounds"}
@@ -42,7 +42,7 @@ def _simulate(thetas: list[dict], t_eval: np.ndarray, phys: PhysicsConfig,
     """Normalized [V; x] outputs for a list of parameter sets, one batched RK4.
     Fine-grid integration + interpolation at the evaluation times keeps the
     forward model accurate regardless of how gappy the data grid is."""
-    t_fine = np.union1d(t_eval, np.linspace(0.0, phys.TF, 401))
+    t_fine = fine_grid(t_eval, phys.TF)
     batch = [torch.tensor([th[k] for th in thetas])
              for k in ("mu", "cd_scale", "cl_scale", "eta")]
     x, v = integrate_rk4(t_fine, *batch, phys)
