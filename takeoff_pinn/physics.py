@@ -57,6 +57,15 @@ def smooth_normal(w_eff: torch.Tensor, lift: torch.Tensor, softness: float) -> t
     return F.softplus((w_eff - lift) / softness) * softness
 
 
+def exogenous_inputs(t: torch.Tensor, cfg: PhysicsConfig):
+    """Time-only inputs (rpm, headwind, runway angle gamma). Separated from the
+    state-dependent forces so integrators can evaluate them once per grid."""
+    rpm = rpm_profile(t, cfg)
+    headwind = headwind_profile(t)
+    gamma = torch.atan(runway_slope_percent(t) / 100.0)
+    return rpm, headwind, gamma
+
+
 def rhs_accel(
     t: torch.Tensor,
     V: torch.Tensor,
@@ -69,16 +78,29 @@ def rhs_accel(
     headwind_offset: torch.Tensor | float = 0.0,
 ) -> torch.Tensor:
     """dV/dt = [eta*T - D - mu*N - W*sin(gamma)] / m  (broadcasts over batch)."""
-    rpm = rpm_profile(t, cfg) + rpm_offset
-    headwind = headwind_profile(t) + headwind_offset
-    slope_pct = runway_slope_percent(t)
+    rpm, headwind, gamma = exogenous_inputs(t, cfg)
+    return accel_from_inputs(V, rpm + rpm_offset, headwind + headwind_offset, gamma,
+                             mu, cd_scale, cl_scale, eta, cfg)
 
+
+def accel_from_inputs(
+    V: torch.Tensor,
+    rpm: torch.Tensor,
+    headwind: torch.Tensor,
+    gamma: torch.Tensor,
+    mu: torch.Tensor,
+    cd_scale: torch.Tensor,
+    cl_scale: torch.Tensor,
+    eta: torch.Tensor,
+    cfg: PhysicsConfig,
+) -> torch.Tensor:
+    """The ground-roll force balance given already-evaluated inputs; the one
+    place the equation of motion is written down."""
     v_air = torch.clamp(V + headwind, min=0.0)
     q = 0.5 * cfg.rho * v_air**2
     D = q * cfg.S * cfg.CD0 * cd_scale
     L = q * cfg.S * cfg.CL0 * cl_scale
 
-    gamma = torch.atan(slope_pct / 100.0)
     N = smooth_normal(cfg.W * torch.cos(gamma), L, cfg.NORMAL_SOFTNESS)
     T = eta * thrust_uninstalled(v_air, rpm, cfg)
 

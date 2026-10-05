@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from .config import DataConfig, PhysicsConfig, TrueParams
-from .physics import rhs_accel
+from .physics import accel_from_inputs, exogenous_inputs
 
 
 def _as_batch(value) -> torch.Tensor:
@@ -29,31 +29,35 @@ def integrate_rk4(
         for p in (mu_b, cd_b, cl_b, eta_b, rpm_b, hw_b)
     )
 
-    x = torch.zeros(B, len(t_np))
-    v = torch.zeros(B, len(t_np))
-    x[:, 0] = cfg.X0
-    v[:, 0] = cfg.V0
+    # Exogenous inputs depend on time only: evaluate them once, vectorized, at
+    # every grid node and stage midpoint instead of inside each RK4 stage.
+    t_mid = 0.5 * (t_np[:-1] + t_np[1:])
+    with torch.no_grad():
+        nodes = exogenous_inputs(torch.as_tensor(t_np, dtype=torch.get_default_dtype()), cfg)
+        mids = exogenous_inputs(torch.as_tensor(t_mid, dtype=torch.get_default_dtype()), cfg)
 
-    def f(t_scalar: float, vv: torch.Tensor) -> torch.Tensor:
-        t_t = torch.full_like(vv, t_scalar)
-        return rhs_accel(t_t, vv, mu_b, cd_b, cl_b, eta_b, cfg,
-                         rpm_offset=rpm_b, headwind_offset=hw_b)
+    def f(inputs, k: int, vv: torch.Tensor) -> torch.Tensor:
+        rpm, hw, gamma = (a[k] for a in inputs)
+        return accel_from_inputs(vv, rpm + rpm_b, hw + hw_b, gamma,
+                                 mu_b, cd_b, cl_b, eta_b, cfg)
 
+    vi = torch.full((B,), float(cfg.V0))
+    xi = torch.full((B,), float(cfg.X0))
+    xs, vs = [xi], [vi]
     with torch.no_grad():
         for i in range(len(t_np) - 1):
             dt = float(t_np[i + 1] - t_np[i])
-            ti, vi, xi = float(t_np[i]), v[:, i], x[:, i]
-            k1v = f(ti, vi)
-            k1x = vi
-            k2v = f(ti + 0.5 * dt, vi + 0.5 * dt * k1v)
-            k2x = vi + 0.5 * dt * k1v
-            k3v = f(ti + 0.5 * dt, vi + 0.5 * dt * k2v)
-            k3x = vi + 0.5 * dt * k2v
-            k4v = f(ti + dt, vi + dt * k3v)
-            k4x = vi + dt * k3v
-            v[:, i + 1] = torch.clamp(vi + (dt / 6.0) * (k1v + 2 * k2v + 2 * k3v + k4v), min=0.0)
-            x[:, i + 1] = xi + (dt / 6.0) * (k1x + 2 * k2x + 2 * k3x + k4x)
-    return x, v
+            k1v = f(nodes, i, vi)
+            k2v = f(mids, i, vi + 0.5 * dt * k1v)
+            k3v = f(mids, i, vi + 0.5 * dt * k2v)
+            k4v = f(nodes, i + 1, vi + dt * k3v)
+            # x' = V, so the x-stages are the V-stage inputs.
+            xi = xi + (dt / 6.0) * (vi + 2 * (vi + 0.5 * dt * k1v)
+                                    + 2 * (vi + 0.5 * dt * k2v) + (vi + dt * k3v))
+            vi = torch.clamp(vi + (dt / 6.0) * (k1v + 2 * k2v + 2 * k3v + k4v), min=0.0)
+            xs.append(xi)
+            vs.append(vi)
+    return torch.stack(xs, dim=1), torch.stack(vs, dim=1)
 
 
 def make_synthetic_data(phys: PhysicsConfig, truth: TrueParams, dcfg: DataConfig, seed: int) -> dict:

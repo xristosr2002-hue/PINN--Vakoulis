@@ -7,6 +7,7 @@ central differences through the forward RK4 model. It powers:
   (replaces the audited independent hand-sigma sampling).
 """
 import numpy as np
+import torch
 
 from .config import ParamSpace, PhysicsConfig
 from .data import integrate_rk4
@@ -29,30 +30,36 @@ def free_parameter_names(space: ParamSpace) -> list[str]:
     return names
 
 
-def _simulate(theta: dict, t_eval: np.ndarray, phys: PhysicsConfig, scales: dict) -> np.ndarray:
-    # Fine-grid integration + interpolation at the evaluation times keeps the
-    # forward model accurate regardless of how gappy the data grid is.
+def _simulate(thetas: list[dict], t_eval: np.ndarray, phys: PhysicsConfig,
+              scales: dict) -> np.ndarray:
+    """Normalized [V; x] outputs for a list of parameter sets, one batched RK4.
+    Fine-grid integration + interpolation at the evaluation times keeps the
+    forward model accurate regardless of how gappy the data grid is."""
     t_fine = np.union1d(t_eval, np.linspace(0.0, phys.TF, 401))
-    x, v = integrate_rk4(t_fine, theta["mu"], theta["cd_scale"],
-                         theta["cl_scale"], theta["eta"], phys)
-    vs = np.interp(t_eval, t_fine, v[0].numpy())
-    xs = np.interp(t_eval, t_fine, x[0].numpy())
-    return np.concatenate([vs / scales["v"], xs / scales["x"]])
+    batch = [torch.tensor([th[k] for th in thetas])
+             for k in ("mu", "cd_scale", "cl_scale", "eta")]
+    x, v = integrate_rk4(t_fine, *batch, phys)
+    return np.array([np.concatenate([np.interp(t_eval, t_fine, vb) / scales["v"],
+                                     np.interp(t_eval, t_fine, xb) / scales["x"]])
+                     for xb, vb in zip(x.numpy(), v.numpy())])
 
 
 def sensitivity_matrix(theta: dict, t_data: np.ndarray, phys: PhysicsConfig,
                        space: ParamSpace, scales: dict):
+    """Central-difference d(outputs)/d(theta_k), all 2p perturbations in one batch."""
     t_sim = np.asarray(t_data, dtype=float)
     names = free_parameter_names(space)
-    cols = []
+    perturbed, steps = [], []
     for name in names:
         lo, hi = getattr(space, _BOUNDS_KEYS[name])
         h = 0.01 * (hi - lo)
         tp, tm = dict(theta), dict(theta)
         tp[name] = float(np.clip(theta[name] + h, lo + 1e-7, hi - 1e-7))
         tm[name] = float(np.clip(theta[name] - h, lo + 1e-7, hi - 1e-7))
-        cols.append((_simulate(tp, t_sim, phys, scales)
-                     - _simulate(tm, t_sim, phys, scales)) / (tp[name] - tm[name]))
+        perturbed += [tp, tm]
+        steps.append(tp[name] - tm[name])
+    out = _simulate(perturbed, t_sim, phys, scales)
+    cols = [(out[2 * j] - out[2 * j + 1]) / steps[j] for j in range(len(names))]
     return np.column_stack(cols), names
 
 
