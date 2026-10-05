@@ -23,6 +23,13 @@ def lumped_drag_coefficient(cd_scale, cl_scale, mu, phys: PhysicsConfig):
     return phys.CD0 * cd_scale - mu * phys.CL0 * cl_scale
 
 
+def kappa_gradient(theta: dict, names: list[str], phys: PhysicsConfig) -> np.ndarray:
+    """d(kappa)/d(theta) over the free parameters, for linear sigma propagation."""
+    d = {"mu": -phys.CL0 * theta["cl_scale"], "cd_scale": phys.CD0,
+         "cl_scale": -theta["mu"] * phys.CL0, "eta": 0.0}
+    return np.array([d[n] for n in names])
+
+
 def free_parameter_names(space: ParamSpace) -> list[str]:
     names = ["mu", "cd_scale", "eta"]
     if space.estimate_cl:
@@ -73,6 +80,30 @@ def identifiability_report(S: np.ndarray, names: list[str]) -> dict:
         "corr": corr.tolist(),
         "max_corr": float(off.max()),
     }
+
+
+def parameter_covariance(S: np.ndarray, residual: np.ndarray, n_channels: int = 2,
+                         weights: np.ndarray | None = None) -> np.ndarray:
+    """Sandwich covariance of a (weighted) least-squares estimate.
+
+    Rows of S and `residual` are equal-length channel blocks ([V; x]), aligned
+    row by row. Noise variance is estimated *per channel*: the normalized V and
+    x residuals differ ~5x in scale, so a pooled sigma^2 misstates the
+    uncertainty. With weights=None (the unweighted OE estimator) this is
+    A^-1 S^T Sigma S A^-1, A = S^T S; with weights = 1/variance it reduces to
+    the inverse Fisher information (S^T Sigma^-1 S)^-1.
+    """
+    n, p = S.shape
+    if residual.shape[0] != n:
+        raise ValueError(f"residual length {residual.shape[0]} != S rows {n}: "
+                         "sensitivities and residuals must use the same samples")
+    dof_scale = n / max(n - p, 1)
+    var = np.concatenate([np.full(len(b), np.mean(b**2) * dof_scale)
+                          for b in np.split(residual, n_channels)])
+    w = np.ones(n) if weights is None else np.asarray(weights, dtype=float)
+    A_inv = np.linalg.pinv((S.T * w) @ S)
+    meat = (S.T * (w**2 * var)) @ S
+    return A_inv @ meat @ A_inv
 
 
 def gauss_newton_covariance(S: np.ndarray, residual: np.ndarray) -> np.ndarray:

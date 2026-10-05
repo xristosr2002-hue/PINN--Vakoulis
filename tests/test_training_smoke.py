@@ -42,7 +42,8 @@ def test_run_experiment_smoke(tmp_path):
     for fname in ("config.json", "metrics.json", "model.pt", "history.json"):
         assert os.path.exists(os.path.join(str(tmp_path), "smoke", fname)), fname
     assert results["identifiability"]["max_corr"] <= 1.0
-    # GN uncertainties are first-class outputs (estimates without error bars
-    # are meaningless for this weakly-identified problem)
-    for key in ("mu_gn_sigma", "cd_scale_gn_sigma", "eta_gn_sigma"):
+    # Uncertainties are first-class outputs (estimates without error bars are
+    # meaningless for this weakly-identified problem). v2: honest per-channel
+    # sandwich sigmas replace the v1 '*_gn_sigma' keys (which were 1.7x low).
+    for key in ("mu_sigma", "cd_scale_sigma", "eta_sigma", "kappa_sigma"):
         assert key in m and m[key] > 0.0

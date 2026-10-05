@@ -69,6 +69,54 @@ def test_mu_eta_near_collinearity_is_exposed():
     assert abs(rep["corr"][i][j]) > 0.99
 
 
+def _two_channel_problem(rng, n=150, sig=(0.005, 0.001)):
+    S = rng.normal(size=(2 * n, 3)) * np.array([1.0, 0.5, 2.0])
+    noise_sd = np.r_[np.full(n, sig[0]), np.full(n, sig[1])]
+    return S, noise_sd
+
+
+def test_parameter_covariance_matches_empirical_scatter_heteroscedastic():
+    """Unweighted LS on two channels with 5x different noise: the sandwich
+    covariance must reproduce the Monte-Carlo scatter of the estimates (the
+    pooled homoscedastic formula does not)."""
+    from takeoff_pinn.identifiability import parameter_covariance
+
+    rng = np.random.default_rng(1)
+    S, sd = _two_channel_problem(rng)
+    est, reported = [], []
+    for _ in range(3000):
+        e = rng.normal(size=sd.shape) * sd
+        beta = np.linalg.lstsq(S, e, rcond=None)[0]
+        est.append(beta)
+        reported.append(np.diag(parameter_covariance(S, e - S @ beta)))
+    empirical = np.var(np.array(est), axis=0)
+    ratio = np.mean(reported, axis=0) / empirical
+    assert np.all(np.abs(ratio - 1.0) < 0.12)
+
+
+def test_parameter_covariance_weighted_reduces_to_inverse_fisher():
+    from takeoff_pinn.identifiability import parameter_covariance
+
+    rng = np.random.default_rng(2)
+    S, sd = _two_channel_problem(rng)
+    r = rng.normal(size=sd.shape) * sd
+    n, p = S.shape
+    var = np.r_[np.full(n // 2, np.mean(r[: n // 2] ** 2)),
+                np.full(n // 2, np.mean(r[n // 2:] ** 2))] * n / (n - p)
+    cov = parameter_covariance(S, r, weights=1.0 / var)
+    assert np.allclose(cov, np.linalg.inv((S.T / var) @ S), rtol=1e-10)
+
+
+def test_parameter_covariance_rejects_misaligned_residual():
+    """E00 bug: S built at all data times, residual from the training subset."""
+    import pytest
+    from takeoff_pinn.identifiability import parameter_covariance
+
+    S = np.ones((20, 3))
+    with pytest.raises(ValueError):
+        parameter_covariance(S, np.zeros(16))
+
+
 def test_covariance_is_symmetric_positive_semidefinite():
     S, names = sensitivity_matrix(THETA, _t_data(), PHYS, ParamSpace(), SCALES)
     resid = np.random.default_rng(0).normal(0.0, 0.01, S.shape[0])

@@ -82,5 +82,6 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
     fvec = resid(res.x)
     info = {"loss": float(np.mean(fvec**2)),
             "residual_data": fvec[: 2 * len(t_np)],
+            "t": t_np,  # sample times of residual_data rows ([V; x] blocks, sorted)
             "scales": {"v": v_scale, "x": x_scale}}
     return theta, info

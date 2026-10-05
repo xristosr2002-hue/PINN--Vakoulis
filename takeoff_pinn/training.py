@@ -13,8 +13,8 @@ from .collocation import make_collocation, topk_residual_points
 from .config import ExperimentConfig, seed_everything
 from .data import load_csv, make_synthetic_data, train_val_split
 from .evaluate import compute_metrics, evaluate_model
-from .identifiability import (free_parameter_names, gauss_newton_covariance,
-                              identifiability_report, sensitivity_matrix)
+from .identifiability import (identifiability_report, kappa_gradient,
+                              parameter_covariance, sensitivity_matrix)
 from .losses import compute_loss, huber_mean
 from .model import TakeoffPINN
 from .oe import output_error_fit
@@ -175,18 +175,23 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     metrics = compute_metrics(fit, data, truth, exp.physics)
 
     theta_hat = {k: fit[k] for k in ("mu", "cd_scale", "cl_scale", "eta")}
-    S, names = sensitivity_matrix(theta_hat, data["t_data"], exp.physics, exp.space,
+    # Sensitivities at exactly the samples whose residuals estimate the noise
+    # (E00 used all data times against training-only residuals: sigma 1.25x low).
+    S, names = sensitivity_matrix(theta_hat, oe_info["t"], exp.physics, exp.space,
                                   oe_info["scales"])
     ident = identifiability_report(S, names)
-    cov = gauss_newton_covariance(S, np.asarray(oe_info["residual_data"]))
+    cov = parameter_covariance(S, np.asarray(oe_info["residual_data"]),
+                               weights=oe_info.get("weights"))
     uq = propagate_uncertainty(theta_hat, cov, names, exp.space, exp.physics,
                                seed=exp.train.seed)
 
     metrics["identifiability_condition_number"] = ident["condition_number"]
     metrics["identifiability_max_corr"] = ident["max_corr"]
-    gn_sigma = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    sigma = np.sqrt(np.clip(np.diag(cov), 0.0, None))
     for j, name in enumerate(names):
-        metrics[f"{name}_gn_sigma"] = float(gn_sigma[j])
+        metrics[f"{name}_sigma"] = float(sigma[j])
+    grad = kappa_gradient(theta_hat, names, exp.physics)
+    metrics["kappa_sigma"] = float(np.sqrt(max(grad @ cov @ grad, 0.0)))
     metrics["x_liftoff_uq_mean"] = float(np.nanmean(uq["x_liftoff"]))
     metrics["x_liftoff_uq_std"] = float(np.nanstd(uq["x_liftoff"]))
     metrics["runtime_s"] = time.time() - t_start
