@@ -90,3 +90,44 @@ Format per Rule 6: CHANGE / WHY / EXPECTED EFFECT / ACTUAL EFFECT / DECISION.
   Test suite runtime rose to 173 s because of the UQ rollout horizon.
 - **DECISION:** Keep. E04 is the reference for all later slide-scenario changes. The v1 identifiability
   facts are pinned to an explicit legacy config in the tests.
+
+---
+
+## E04-MS — Multi-seed reference for the slide scenario (Agent 4)
+
+`scripts/multiseed.py --tag E04_scenario`, seeds 7/17/27/37/47 (each seed changes both the noise and the initialization).
+V-RMSE 0.0143 ± 0.0039 m/s, x-RMSE 0.048 ± 0.024 m, r_dyn RMS 0.0094 m/s².
+Parameter RMSE: μ 0.0122, c_D 0.052, η 0.040, κ 0.00068 (1.7 %). Ground-roll error 0.88 ± 0.29 %.
+The PINN θ stays within 0.002 of the OE θ in every seed (see log): the parameters come from the
+OE stage.
+
+---
+
+## C5 / E05 — Normal-force smoothing 5 N → 0.5 N (Agent 2; challenged by Agents 1 and 4)
+
+- **CHANGE:** `NORMAL_SOFTNESS` 5 → 0.5 N. `T_MAX` 45.5 → 45.44 N, so the user's calibration rule (truth
+  liftoff at the end of the 13.5 s record) still holds. Adds metrics `*_oe`, `x_liftoff_oe`,
+  `val_pre_lbfgs` and `val_post_lbfgs` (diagnostics only, numerics unchanged).
+- **WHY (Agent 2):** max(W − L, 0) is smoothed only to keep gradients finite at the liftoff kink. Near
+  liftoff the net force is about 2.6 N, but the 5 N softplus overstated N by up to 3.5 N
+  (friction +0.28 N, about 10 % of the acceleration) and spuriously broke the c_D/c_L degeneracy.
+  The κ-invariant trajectory deviated by 3.8e-3 m before liftoff; with 0.5 N it deviates by 2.6e-4 m.
+  **Agent 1 challenge:** does a sharper kink hurt the autograd residual? The kink sits at the domain
+  edge (liftoff), so inside [0, TF] the residual stays smooth. **Agent 4:** decide on measured outcomes.
+- **ACTUAL (5 seeds, E04 → E05):** V-RMSE 0.0143 → 0.0131, x-RMSE 0.048 → 0.037, r_dyn 0.0094 → 0.0092.
+  μ/c_D/η RMSE 0.0122/0.052/0.040 → 0.0125/0.051/0.040; κ RMSE 0.00068 → 0.00077 (within seed scatter).
+  Ground-roll error 0.88 → 0.91 %. Truth liftoff 13.496 s, 113.46 m.
+  Sensitivity corr(c_D, c_L) −0.99877 → −0.99999.
+- **DECISION:** Keep. The physics is more correct and no metric regresses beyond seed scatter.
+
+### Evidence gathered in E05 for other proposals
+
+- **C6 (proposed by Agent 1 in the audit, ML-1): accept L-BFGS only if validation does not worsen.**
+  In 5/5 seeds L-BFGS *improved* the validation score (×10⁵: 2.90→2.72, 3.39→3.04, 5.67→3.61,
+  3.19→2.46, 3.06→2.62). **DECISION: Rejected.** No measurable benefit. The diagnostic stays, so a
+  regression would show up in the metrics.
+- **ML-3: does the PINN improve the parameters over its OE initializer?** RMSE PINN vs OE:
+  μ 0.0125 vs 0.0127, c_D 0.0509 vs 0.0541, η 0.0399 vs 0.0411, κ 0.00077 vs 0.00064.
+  x_LOF bias +0.31 m (PINN) vs +0.20 m (OE). **Conclusion:** no difference beyond seed scatter. The
+  parameters are identified by the OE stage; the PINN provides state reconstruction and residual
+  diagnostics.
