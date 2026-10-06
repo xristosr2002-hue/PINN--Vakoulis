@@ -80,7 +80,7 @@ def compute_loss(model, t_data, x_data, v_data, t_phys, epoch,
 
     ramp = physics_ramp(epoch, tc)
     w_pr = prior_weight(epoch, tc)
-    total = (tc.w_v * loss_v + tc.w_x * loss_x
+    total = (tc.w_v * loss_v + tc.w_x * scales.get("w_x_rel", 1.0) * loss_x
              + tc.w_dyn * ramp * loss_dyn + tc.w_kin * ramp * loss_kin
              + w_pr * loss_prior + loss_event)
 

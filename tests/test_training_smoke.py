@@ -66,3 +66,25 @@ def test_run_experiment_with_observed_liftoff_estimates_cl(tmp_path):
     assert "cl_scale_sigma" in m and 0.0 < m["cl_scale_sigma"] < 0.05
     assert abs(m["cl_scale_oe"] - 1.0) < 0.03  # OE recovers c_L from the 1.05 start
     assert np.isfinite(m["gen_ground_roll_pct_err"])
+
+
+def test_frozen_parameters_stay_at_oe_estimate(tmp_path):
+    exp = _quick_cfg(tmp_path)
+    exp.name = "smoke_frozen"
+    exp.train.pinn_trains_params = False
+    m = run_experiment(exp)["metrics"]
+    for k in ("mu", "cd_scale", "eta"):
+        assert abs(m[k] - m[f"{k}_oe"]) < 1e-9
+
+
+def test_noise_data_weighting_upweights_the_cleaner_x_channel(tmp_path):
+    from takeoff_pinn.training import train_restart
+    from takeoff_pinn.data import make_synthetic_data
+
+    exp = _quick_cfg(tmp_path)
+    exp.train.data_weighting = "noise"
+    exp.train.epochs_adam, exp.train.use_lbfgs = 2, False
+    data = make_synthetic_data(exp.physics, exp.truth, exp.data, exp.train.seed)
+    _, _, _, scales, _, _ = train_restart(0, data, exp)
+    # sigma_x/x_scale is ~10x smaller than sigma_v/v_scale in this scenario
+    assert scales["w_x_rel"] > 10.0

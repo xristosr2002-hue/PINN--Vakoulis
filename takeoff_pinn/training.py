@@ -50,7 +50,7 @@ def pretrain(model, t_train, x_train, v_train, scales, tc) -> None:
         opt.zero_grad(set_to_none=True)
         x_p, v_p = model(t_train)
         loss = (huber_mean((v_p - v_train) / scales["v"])
-                + huber_mean((x_p - x_train) / scales["x"]))
+                + scales.get("w_x_rel", 1.0) * huber_mean((x_p - x_train) / scales["x"]))
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), tc.grad_clip)
         opt.step()
@@ -82,6 +82,14 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig, liftoff: d
         scales["event"] = {"t": liftoff["t"], "sigma_g": oe_info["sigma_g"],
                            "weight": 0.5 * s_v**2 / n_v}
     oe_info["theta"] = theta0
+    if tc.data_weighting == "noise":
+        n_v = len(tr_idx)
+        r = np.asarray(oe_info["residual_data"])
+        sig_v = float(np.std(r[:n_v])) * oe_info["scales"]["v"]  # physical units
+        sig_x = float(np.std(r[n_v:])) * oe_info["scales"]["x"]
+        scales["w_x_rel"] = ((sig_v / scales["v"]) / (sig_x / scales["x"])) ** 2
+    elif tc.data_weighting != "scale":
+        raise ValueError(f"unknown data_weighting: {tc.data_weighting}")
     model = TakeoffPINN(phys, space, jitter=float(restart_id))
     _inject_theta(model, theta0)
 
@@ -90,11 +98,15 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig, liftoff: d
     extra = np.array([], dtype=float)
     t_phys = make_collocation(phys, tc, rng, extra)
 
-    optimizer = torch.optim.AdamW([
-        {"params": [p for n, p in model.named_parameters() if not n.endswith("raw")],
-         "lr": tc.lr, "weight_decay": tc.weight_decay},
-        {"params": model.physical_raw_parameters(), "lr": tc.lr_phys, "weight_decay": 0.0},
-    ])
+    groups = [{"params": [p for n, p in model.named_parameters() if not n.endswith("raw")],
+               "lr": tc.lr, "weight_decay": tc.weight_decay}]
+    if tc.pinn_trains_params:
+        groups.append({"params": model.physical_raw_parameters(), "lr": tc.lr_phys,
+                       "weight_decay": 0.0})
+    else:  # parameters stay at the OE estimate
+        for p in model.physical_raw_parameters():
+            p.requires_grad_(False)
+    optimizer = torch.optim.AdamW(groups)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=tc.epochs_adam, eta_min=tc.lr * 0.03)
 
@@ -159,7 +171,7 @@ def val_score(model, t_val, x_val, v_val, t_phys, phys, space, tc, scales) -> fl
     with torch.enable_grad():
         _, vparts = compute_loss(model, t_val, x_val, v_val, t_phys, None,
                                  phys, space, tc, scales)
-    return (vparts["v_data"] + vparts["x_data"]
+    return (vparts["v_data"] + scales.get("w_x_rel", 1.0) * vparts["x_data"]
             + 0.10 * vparts["dyn"] + 0.10 * vparts["kin"])
 
 
