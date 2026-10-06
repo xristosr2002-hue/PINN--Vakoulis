@@ -56,9 +56,11 @@ class TrueParams:
 class ParamSpace:
     """Bounds and (deliberately off-truth) priors for the discoverable parameters.
 
-    Audit finding #2: with N > 0 the sensitivities of cd_scale and cl_scale are
-    exactly anti-collinear, so cl_scale is fixed to its nominal value by default
-    and only estimated for the degeneracy ablation (estimate_cl=True).
+    While N > 0 the sensitivities of cd_scale and cl_scale are exactly
+    anti-collinear (only kappa = CD0*cd - mu*CL0*cl is identifiable). An
+    observed liftoff time makes cl identifiable (C9, E08), so cl is estimated
+    by default *when* such an observation exists; otherwise the pipeline falls
+    back to cl fixed at prior_cl, and cd is then conditional on that value.
     """
     mu_bounds: tuple = (0.020, 0.160)
     cd_bounds: tuple = (0.600, 1.700)
@@ -66,13 +68,13 @@ class ParamSpace:
     eta_bounds: tuple = (0.750, 1.050)
     prior_mu: float = 0.090
     prior_cd: float = 1.000
-    prior_cl: float = 1.000
+    prior_cl: float = 1.050   # nominal (e.g. CFD) value, deliberately 5 % off truth
     prior_eta: float = 0.930
     prior_sigma_mu: float = 0.035
     prior_sigma_cd: float = 0.35
     prior_sigma_cl: float = 0.25
     prior_sigma_eta: float = 0.10
-    estimate_cl: bool = False
+    estimate_cl: bool = True
 
 
 @dataclass

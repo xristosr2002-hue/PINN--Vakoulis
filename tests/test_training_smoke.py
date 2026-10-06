@@ -88,3 +88,17 @@ def test_noise_data_weighting_upweights_the_cleaner_x_channel(tmp_path):
     _, _, _, scales, _, _ = train_restart(0, data, exp)
     # sigma_x/x_scale is ~10x smaller than sigma_v/v_scale in this scenario
     assert scales["w_x_rel"] > 10.0
+
+
+def test_without_liftoff_observation_cl_falls_back_to_nominal(tmp_path):
+    """No liftoff time -> c_L is not identifiable: fixed at prior_cl (recorded)."""
+    import json
+
+    exp = _quick_cfg(tmp_path)
+    exp.name = "smoke_fallback"
+    exp.data.observe_liftoff = False
+    m = run_experiment(exp)["metrics"]
+    assert m["liftoff_observed"] is False
+    assert m["cl_scale"] == exp.space.prior_cl and "cl_scale_sigma" not in m
+    saved = json.load(open(os.path.join(str(tmp_path), "smoke_fallback", "config.json")))
+    assert saved["space"]["estimate_cl"] is False

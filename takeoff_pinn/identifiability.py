@@ -30,6 +30,20 @@ def kappa_gradient(theta: dict, names: list[str], phys: PhysicsConfig) -> np.nda
     return np.array([d[n] for n in names])
 
 
+def params_at_bounds(theta: dict, names: list[str], space: ParamSpace,
+                     rel_tol: float = 1e-3) -> list[str]:
+    """Free parameters whose estimate sits on a box bound. The linearized
+    covariance is meaningless there, and a pinned estimate is a typical
+    symptom of model-form error (E10: eta pinned at 1.05 in 10/10 seeds)."""
+    out = []
+    for n in names:
+        lo, hi = getattr(space, _BOUNDS_KEYS[n])
+        tol = rel_tol * (hi - lo)
+        if theta[n] <= lo + tol or theta[n] >= hi - tol:
+            out.append(n)
+    return out
+
+
 def free_parameter_names(space: ParamSpace) -> list[str]:
     names = ["mu", "cd_scale", "eta"]
     if space.estimate_cl:

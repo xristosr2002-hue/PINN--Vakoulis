@@ -89,17 +89,31 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
     p0 = np.clip((priors - lows) / (highs - lows), 1e-6, 1 - 1e-6)
     jitter = np.array([1.5, -2.0, 1.0]) if len(names) == 3 else np.array([1.5, -2.0, -0.8, 1.0])
     z0 = np.log(p0 / (1.0 - p0)) + 0.1 * seed * jitter
-    def solve(z_start, row_w):
+    def solve(z_start, row_w, free=None):
+        """Weighted least squares over the coordinates in `free` (all if None);
+        the others stay at their z_start values."""
         sw = np.sqrt(row_w)
-        return least_squares(lambda z: sw * resid(z), z_start,
-                             jac=lambda z: sw[:, None] * jac(z),
-                             max_nfev=tc.oe_max_nfev, xtol=1e-10, ftol=1e-10, gtol=1e-10).x
+        free = np.ones(len(z_start), bool) if free is None else free
+
+        def full(zf):
+            z = np.array(z_start, dtype=float)
+            z[free] = zf
+            return z
+
+        zf = least_squares(lambda zf: sw * resid(full(zf)), np.asarray(z_start)[free],
+                           jac=lambda zf: sw[:, None] * jac(full(zf))[:, free],
+                           max_nfev=tc.oe_max_nfev, xtol=1e-10, ftol=1e-10, gtol=1e-10).x
+        return full(zf)
 
     n_rows = 2 * len(t_np)
     # First pass: unit weights on V/x and the liftoff row switched off (its
     # sigma units are not comparable to the normalized V/x residuals yet).
+    # Without that row c_L is not identifiable, so it is held at its nominal
+    # value in this pass (otherwise the solver wanders along the degenerate
+    # c_D-c_L valley until max_nfev); it is freed once the row is weighted.
     weights = np.ones(n_rows) if liftoff is None else np.append(np.ones(n_rows), 0.0)
-    z = solve(z0, weights)
+    first_free = np.array([n != "cl_scale" or liftoff is None for n in names])
+    z = solve(z0, weights, first_free)
     if tc.oe_weighted:
         # Output-error relaxation (Klein & Morelli): estimate the per-channel
         # noise variance R from the residuals, refit minimizing r^T R^-1 r,

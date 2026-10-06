@@ -1,6 +1,7 @@
 """Full training pipeline: OE init -> supervised pretrain -> curriculum AdamW
 -> optional L-BFGS polish, with restarts, validation-scored checkpointing,
 identifiability report, correlated UQ, and on-disk artifacts."""
+import dataclasses
 import json
 import math
 import os
@@ -14,7 +15,7 @@ from .config import ExperimentConfig, seed_everything
 from .data import load_csv, make_synthetic_data, train_val_split
 from .evaluate import compute_metrics, evaluate_model, predict_liftoff
 from .identifiability import (event_sensitivity, identifiability_report, kappa_gradient,
-                              lumped_drag_coefficient, parameter_covariance,
+                              lumped_drag_coefficient, parameter_covariance, params_at_bounds,
                               sensitivity_matrix)
 from .losses import compute_loss, huber_mean
 from .model import TakeoffPINN
@@ -56,7 +57,8 @@ def pretrain(model, t_train, x_train, v_train, scales, tc) -> None:
         opt.step()
 
 
-def train_restart(restart_id: int, data: dict, exp: ExperimentConfig, liftoff: dict | None = None):
+def train_restart(restart_id: int, data: dict, exp: ExperimentConfig, liftoff: dict | None = None,
+                  oe: tuple | None = None):
     phys, space, tc = exp.physics, exp.space, exp.train
     rng = seed_everything(tc.seed + 1000 * restart_id)
 
@@ -70,9 +72,13 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig, liftoff: d
         "a": phys.a_scale,
     }
 
-    theta0, oe_info = output_error_fit(data["t_data"][tr_idx], data["x_data"][tr_idx],
-                                       data["v_data"][tr_idx], phys, space, tc,
-                                       seed=restart_id, liftoff=liftoff)
+    # The OE fit depends only on the (fixed) training split, so run_experiment
+    # computes it once and shares it across restarts; restarts differ in the
+    # network initialization and collocation draws.
+    theta0, oe_info = oe if oe is not None else output_error_fit(
+        data["t_data"][tr_idx], data["x_data"][tr_idx], data["v_data"][tr_idx],
+        phys, space, tc, seed=restart_id, liftoff=liftoff)
+    oe_info = dict(oe_info)
     print(f"restart {restart_id + 1}: OE init "
           f"mu={theta0['mu']:.5f} cd={theta0['cd_scale']:.4f} cl={theta0['cl_scale']:.4f} "
           f"eta={theta0['eta']:.4f} (loss={oe_info['loss']:.3e})")
@@ -190,12 +196,21 @@ def run_experiment(exp: ExperimentConfig) -> dict:
         if data.get("t_liftoff_obs") is not None:
             liftoff = {"t": data["t_liftoff_obs"], "sigma": data["sigma_t_liftoff"]}
         else:
-            print("WARNING: estimating c_L without an observed liftoff time: c_D and c_L "
-                  "are then not separately identifiable (degeneracy ablation only).")
+            # Without the liftoff time c_D and c_L are not separately
+            # identifiable: fall back to the nominal c_L instead of fitting a
+            # degenerate direction, and record the switch in config.json.
+            print(f"WARNING: no observed liftoff time -> c_L fixed at its nominal value "
+                  f"{exp.space.prior_cl}; the reported c_D is conditional on it "
+                  f"(only kappa is data-determined).")
+            exp.space = dataclasses.replace(exp.space, estimate_cl=False)
+            exp.save()
 
     best = None
+    tr_idx, _ = train_val_split(len(data["t_data"]))
+    oe = output_error_fit(data["t_data"][tr_idx], data["x_data"][tr_idx], data["v_data"][tr_idx],
+                          exp.physics, exp.space, exp.train, seed=0, liftoff=liftoff)
     for r in range(exp.train.n_restarts):
-        model, history, score, scales, oe_info, diag = train_restart(r, data, exp, liftoff)
+        model, history, score, scales, oe_info, diag = train_restart(r, data, exp, liftoff, oe)
         print(f"restart {r + 1}/{exp.train.n_restarts}: val score = {score:.4e} "
               f"(before L-BFGS {diag['val_pre_lbfgs']:.4e})")
         if best is None or score < best[2]:
@@ -237,6 +252,10 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     pcorr = cov / np.outer(sd, sd)
     metrics["param_corr_max"] = float(np.max(np.abs(pcorr - np.eye(len(names)))))
     metrics["liftoff_observed"] = liftoff is not None
+    metrics["params_at_bounds"] = params_at_bounds(theta_hat, names, exp.space)
+    if metrics["params_at_bounds"]:
+        print(f"WARNING: estimates on a bound {metrics['params_at_bounds']}: their sigma is not "
+              f"meaningful; check the model form and the bounds.")
     if liftoff is not None:
         metrics["t_liftoff_obs"] = liftoff["t"]
     sigma = np.sqrt(np.clip(np.diag(cov), 0.0, None))

@@ -25,11 +25,12 @@ def test_hard_initial_conditions_exact():
     assert abs(float(dxdt0) - 2.0) < 1e-9  # dx/dt(0) = V0 by construction
 
 
-def test_cl_fixed_by_default_but_estimable_on_request():
+def test_cl_fixed_at_nominal_or_trainable():
     phys = PhysicsConfig()
-    fixed = TakeoffPINN(phys, ParamSpace(estimate_cl=False))
+    space = ParamSpace(estimate_cl=False)
+    fixed = TakeoffPINN(phys, space)
     _, _, cl, _ = fixed.params_physical()
-    assert not cl.requires_grad and abs(float(cl) - 1.0) < 1e-12
+    assert not cl.requires_grad and abs(float(cl) - space.prior_cl) < 1e-12
 
     free = TakeoffPINN(phys, ParamSpace(estimate_cl=True))
     _, _, cl2, _ = free.params_physical()

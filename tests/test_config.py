@@ -43,6 +43,7 @@ def test_priors_differ_from_truth():
     assert space.prior_mu != truth.mu
     assert space.prior_cd != truth.cd_scale
     assert space.prior_eta != truth.eta
+    assert space.prior_cl != truth.cl_scale  # nominal (CFD-like) c_L is 5 % off
 
 
 def test_config_load_roundtrip(tmp_path):

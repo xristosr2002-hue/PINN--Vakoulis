@@ -188,3 +188,13 @@ def test_liftoff_row_resolves_cd_cl_degeneracy():
     sd_without = np.sqrt(parameter_covariance(S, r, weights=w)[j, j])
     sd_with = np.sqrt(parameter_covariance(S, r, weights=w, S_known=K)[j, j])
     assert sd_without > 0.1 and sd_with < 0.01
+
+
+def test_params_at_bounds_flags_pinned_estimates():
+    from takeoff_pinn.identifiability import params_at_bounds
+
+    sp = ParamSpace()
+    theta = {"mu": 0.08, "cd_scale": 1.15, "cl_scale": 1.0, "eta": sp.eta_bounds[1]}
+    assert params_at_bounds(theta, ["mu", "cd_scale", "eta"], sp) == ["eta"]
+    theta["eta"] = 0.91
+    assert params_at_bounds(theta, ["mu", "cd_scale", "eta"], sp) == []
