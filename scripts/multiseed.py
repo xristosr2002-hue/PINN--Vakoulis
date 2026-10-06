@@ -12,8 +12,10 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
+import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -42,6 +44,22 @@ def apply_override(exp, assignment: str) -> None:
     if isinstance(value, list):
         value = tuple(value)
     setattr(target, field, value)
+
+
+def run_one(seed: int, preset: str, tag: str, out_dir: str, overrides: list, threads: int) -> dict:
+    """One full pipeline run (also the process-pool entry point)."""
+    if threads:
+        torch.set_num_threads(threads)
+    exp = build_preset(preset)
+    exp.name, exp.out_dir = f"{tag}_s{seed}", out_dir
+    exp.train.seed = seed
+    for a in overrides:
+        apply_override(exp, a)
+    m = run_experiment(exp)["metrics"]
+    m["seed"] = seed
+    m["_truth"] = {"mu": exp.truth.mu, "cd_scale": exp.truth.cd_scale,
+                   "eta": exp.truth.eta, "kappa": m["kappa_true"]}
+    return m
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -77,25 +95,24 @@ def main(argv=None) -> int:
     ap.add_argument("--preset", default="full")
     ap.add_argument("--set", nargs="*", default=[], dest="overrides")
     ap.add_argument("--out-dir", default="results")
+    ap.add_argument("--jobs", type=int, default=1)
     args = ap.parse_args(argv)
 
-    rows = []
     t0 = time.time()
-    for seed in args.seeds:
-        exp = build_preset(args.preset)
-        exp.name, exp.out_dir = f"{args.tag}_s{seed}", args.out_dir
-        exp.train.seed = seed
-        for a in args.overrides:
-            apply_override(exp, a)
-        m = run_experiment(exp)["metrics"]
-        m["seed"] = seed
-        m["_truth"] = {"mu": exp.truth.mu, "cd_scale": exp.truth.cd_scale,
-                       "eta": exp.truth.eta, "kappa": m["kappa_true"]}
-        rows.append(m)
-        print(f"[{args.tag}] seed {seed} done ({time.time() - t0:.0f} s)", flush=True)
+    if args.jobs > 1:
+        # runtime_s is then not comparable to sequential runs (shared CPU)
+        threads = max(1, (os.cpu_count() or 1) // args.jobs)
+        n = len(args.seeds)
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            rows = list(pool.map(run_one, args.seeds, [args.preset] * n, [args.tag] * n,
+                                 [args.out_dir] * n, [args.overrides] * n, [threads] * n))
+    else:
+        rows = [run_one(s, args.preset, args.tag, args.out_dir, args.overrides, 0)
+                for s in args.seeds]
+    print(f"[{args.tag}] {len(rows)} seeds done ({time.time() - t0:.0f} s)", flush=True)
 
     summary = summarize(rows)
-    record = {"tag": args.tag, "preset": args.preset, "overrides": args.overrides,
+    record = {"tag": args.tag, "preset": args.preset, "overrides": args.overrides, "jobs": args.jobs,
               "seeds": args.seeds, "summary": summary, "rows": rows}
     out = os.path.join("experiments", args.tag, "multiseed.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)

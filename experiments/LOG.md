@@ -131,3 +131,36 @@ OE stage.
   x_LOF bias +0.31 m (PINN) vs +0.20 m (OE). **Conclusion:** no difference beyond seed scatter. The
   parameters are identified by the OE stage; the PINN provides state reconstruction and residual
   diagnostics.
+
+---
+
+## C8 / E06 + E07 — Noise-weighted (maximum-likelihood) output error (Agent 1 + Agent 2 SID practice)
+
+- **CHANGE:** `TrainConfig.oe_weighted` (now **default True**) runs the output-error relaxation of
+  Klein & Morelli: estimate the per-channel noise variance R from the residuals, refit minimizing
+  rᵀR⁻¹r, and repeat (`oe_relax_iters = 2`). The row weights feed the sandwich covariance, which
+  then reduces to the inverse Fisher information.
+- **WHY:** The normalized V and x noise differ about 5×. Equal weighting wastes most of the information
+  in the cleaner channel (x). The Fisher calculation predicted about 2.4× smaller σ.
+- **ACTUAL — OE Monte-Carlo, 40 seeds, slide scenario (`E06_oe_mc_slide`):**
+  RMSE μ/c_D/η 0.0191/0.0825/0.0623 → **0.0090/0.0381/0.0291** (2.1–2.2×), bias reduced 4–6×.
+  Weighted σ z-std 1.15 (95 % coverage 0.90): about 15 % optimistic, borderline at this sample size.
+  Reported as is, not tuned.
+- **ACTUAL — full pipeline, 10 seeds (`E07a` unweighted vs `E07b` weighted, seeds 7…97, --jobs 4):**
+
+  | | E07a | E07b |
+  |---|---|---|
+  | μ / c_D / η RMSE (PINN) | 0.0215 / 0.095 / 0.071 | **0.0067 / 0.024 / 0.020** |
+  | κ RMSE PINN / OE | 0.00087 / 0.00097 | 0.00071 / **0.00024** |
+  | x_LOF error RMSE PINN / OE | 0.91 / 0.88 m | 1.17 / **0.24 m** |
+  | x_LOF bias PINN / OE | +0.46 / +0.16 m | +0.94 / −0.05 m |
+  | σ(x_LOF) param-only | 9.4 ± 8.7 m (erratic) | 0.42 ± 0.04 m |
+  | V / x RMSE vs truth | 0.0146 / 0.044 | 0.0150 / 0.061 |
+
+- **DECISION:** Keep, and make it the default. The identified parameters are 3–4× more accurate, and the classical takeoff
+  prediction is 3.6× more accurate. The erratic E07a takeoff UQ came from the large unweighted
+  covariance pushing samples into the strongly nonlinear near-terminal regime.
+- **New finding → C10:** the PINN stage *degrades* κ and the takeoff prediction relative to its own OE
+  initializer (κ bias +5e-4, correlation with the x_LOF error 0.87). Its data loss weights V and x by signal
+  maxima rather than noise, so its optimum is not the maximum-likelihood one. This was already present
+  in v1 (E07a bias 0.46 vs 0.16 m) and is now clearly exposed.

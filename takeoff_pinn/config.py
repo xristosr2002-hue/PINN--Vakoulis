@@ -121,7 +121,7 @@ class TrainConfig:
     oe_max_nfev: int = 300
     # Noise-weighted (maximum-likelihood) output error with estimated
     # per-channel variance; see LOG C8 for the evidence behind the default.
-    oe_weighted: bool = False
+    oe_weighted: bool = True
     oe_relax_iters: int = 2
 
 
