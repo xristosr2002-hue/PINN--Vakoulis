@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from .config import ParamSpace, PhysicsConfig
-from .data import fine_grid, integrate_rk4
+from .data import event_nodes, fine_grid, integrate_rk4, liftoff_time_offset
 
 _BOUNDS_KEYS = {"mu": "mu_bounds", "cd_scale": "cd_bounds",
                 "cl_scale": "cl_bounds", "eta": "eta_bounds"}
@@ -83,7 +83,8 @@ def identifiability_report(S: np.ndarray, names: list[str]) -> dict:
 
 
 def parameter_covariance(S: np.ndarray, residual: np.ndarray, n_channels: int = 2,
-                         weights: np.ndarray | None = None) -> np.ndarray:
+                         weights: np.ndarray | None = None,
+                         S_known: np.ndarray | None = None) -> np.ndarray:
     """Sandwich covariance of a (weighted) least-squares estimate.
 
     Rows of S and `residual` are equal-length channel blocks ([V; x]), aligned
@@ -92,6 +93,8 @@ def parameter_covariance(S: np.ndarray, residual: np.ndarray, n_channels: int = 
     uncertainty. With weights=None (the unweighted OE estimator) this is
     A^-1 S^T Sigma S A^-1, A = S^T S; with weights = 1/variance it reduces to
     the inverse Fisher information (S^T Sigma^-1 S)^-1.
+    S_known: extra sensitivity rows already in units of a *known* noise sigma
+    (e.g. the observed liftoff time), entering with unit weight and variance.
     """
     n, p = S.shape
     if residual.shape[0] != n:
@@ -101,8 +104,12 @@ def parameter_covariance(S: np.ndarray, residual: np.ndarray, n_channels: int = 
     var = np.concatenate([np.full(len(b), np.mean(b**2) * dof_scale)
                           for b in np.split(residual, n_channels)])
     w = np.ones(n) if weights is None else np.asarray(weights, dtype=float)
-    A_inv = np.linalg.pinv((S.T * w) @ S)
+    A = (S.T * w) @ S
     meat = (S.T * (w**2 * var)) @ S
+    if S_known is not None:
+        K = np.atleast_2d(S_known)
+        A, meat = A + K.T @ K, meat + K.T @ K
+    A_inv = np.linalg.pinv(A)
     return A_inv @ meat @ A_inv
 
 
@@ -112,3 +119,26 @@ def gauss_newton_covariance(S: np.ndarray, residual: np.ndarray) -> np.ndarray:
     dof = max(n - p, 1)
     sigma2 = float(residual @ residual) / dof
     return sigma2 * np.linalg.pinv(S.T @ S)
+
+
+def event_sensitivity(theta: dict, liftoff: dict, phys: PhysicsConfig,
+                      space: ParamSpace) -> np.ndarray:
+    """Row d[(t_L - t_obs)/sigma_t]/d(theta) by central differences (one batch)."""
+    names = free_parameter_names(space)
+    nodes = event_nodes(liftoff["t"])
+    t_fine = fine_grid(nodes, nodes[-1])
+    perturbed, steps = [], []
+    for name in names:
+        lo, hi = getattr(space, _BOUNDS_KEYS[name])
+        h = 0.01 * (hi - lo)
+        tp, tm = dict(theta), dict(theta)
+        tp[name] = float(np.clip(theta[name] + h, lo + 1e-7, hi - 1e-7))
+        tm[name] = float(np.clip(theta[name] - h, lo + 1e-7, hi - 1e-7))
+        perturbed += [tp, tm]
+        steps.append(tp[name] - tm[name])
+    batch = [torch.tensor([th[k] for th in perturbed])
+             for k in ("mu", "cd_scale", "cl_scale", "eta")]
+    _, v = integrate_rk4(t_fine, *batch, phys)
+    off, _ = liftoff_time_offset(t_fine, v, batch[2].numpy(), liftoff["t"], phys)
+    off = off / liftoff["sigma"]
+    return np.array([(off[2 * j] - off[2 * j + 1]) / steps[j] for j in range(len(names))])

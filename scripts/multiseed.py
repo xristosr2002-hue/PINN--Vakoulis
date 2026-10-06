@@ -22,11 +22,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from takeoff_pinn.run import build_preset  # noqa: E402
 from takeoff_pinn.training import run_experiment  # noqa: E402
 
-PARAMS = ("mu", "cd_scale", "eta", "kappa")
+PARAMS = ("mu", "cd_scale", "cl_scale", "eta", "kappa")
 REPORT = ("v_rmse_true", "x_rmse_true", "r_dyn_rms", "r_kin_rms", "t_liftoff_pred",
           "x_liftoff_pred", "ground_roll_pct_err", "liftoff_time_abs_err",
           "x_liftoff_sigma_param", "x_liftoff_sigma_total", "identifiability_max_corr", "runtime_s", "x_liftoff_oe",
-          "val_pre_lbfgs", "val_post_lbfgs")
+          "val_pre_lbfgs", "val_post_lbfgs", "gen_ground_roll_pct_err", "param_corr_max")
 
 
 def apply_override(exp, assignment: str) -> None:
@@ -58,7 +58,8 @@ def run_one(seed: int, preset: str, tag: str, out_dir: str, overrides: list, thr
     m = run_experiment(exp)["metrics"]
     m["seed"] = seed
     m["_truth"] = {"mu": exp.truth.mu, "cd_scale": exp.truth.cd_scale,
-                   "eta": exp.truth.eta, "kappa": m["kappa_true"]}
+                   "cl_scale": exp.truth.cl_scale, "eta": exp.truth.eta,
+                   "kappa": m["kappa_true"]}
     return m
 
 

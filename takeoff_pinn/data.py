@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from .config import DataConfig, PhysicsConfig, TrueParams
-from .physics import accel_from_inputs, exogenous_inputs
+from .physics import accel_from_inputs, exogenous_inputs, normal_force_margin
 
 
 RK4_MAX_DT = 0.02  # s; resolves the ~17 ms rpm blend (4th-order regime, see tests)
@@ -70,6 +70,75 @@ def integrate_rk4(
     return torch.stack(xs, dim=1), torch.stack(vs, dim=1)
 
 
+def first_event(t, x, g):
+    """First time the event function g drops to <= 0 (from > 0), with linear
+    interpolation of t and x; (nan, nan) if it never does on the grid."""
+    t, x, g = (np.asarray(a, dtype=float) for a in (t, x, g))
+    idx = np.where(g <= 0.0)[0]
+    if len(idx) == 0:
+        return float("nan"), float("nan")
+    j = int(idx[0])
+    if j == 0:
+        return float(t[0]), float(x[0])
+    frac = float(np.clip(g[j - 1] / (g[j - 1] - g[j]), 0.0, 1.0))
+    return (float(t[j - 1] + frac * (t[j] - t[j - 1])),
+            float(x[j - 1] + frac * (x[j] - x[j - 1])))
+
+
+def predict_liftoff(mu, cd_scale, cl_scale, eta, phys: PhysicsConfig,
+                    rpm_offset=0.0, headwind_offset=0.0, horizon: float = 2.0,
+                    dt: float = 0.01) -> dict:
+    """Liftoff (L = W*cos(gamma)) by forward RK4 with the given parameters,
+    integrated up to horizon*TF so events after the record end are still
+    found. Batched over parameter sets; returns arrays of t, x, V at liftoff
+    and x at TF."""
+    t = np.linspace(0.0, horizon * phys.TF, int(round(horizon * phys.TF / dt)) + 1)
+    batch = [torch.as_tensor(np.atleast_1d(np.asarray(a, dtype=float)))
+             for a in (mu, cd_scale, cl_scale, eta, rpm_offset, headwind_offset)]
+    B = max(b.numel() for b in batch)
+    mu_b, cd_b, cl_b, eta_b, rpm_b, hw_b = (b.expand(B) if b.numel() == 1 else b for b in batch)
+    x, v = integrate_rk4(t, mu_b, cd_b, cl_b, eta_b, phys,
+                         rpm_offset=rpm_b, headwind_offset=hw_b)
+    with torch.no_grad():
+        margin = normal_force_margin(torch.as_tensor(t).reshape(1, -1), v,
+                                     cl_b.reshape(-1, 1), phys,
+                                     headwind_offset=hw_b.reshape(-1, 1)).numpy()
+    x_np, v_np = x.numpy(), v.numpy()
+    out = {"t": np.full(B, np.nan), "x": np.full(B, np.nan), "V": np.full(B, np.nan)}
+    for i in range(B):
+        out["t"][i], out["x"][i] = first_event(t, x_np[i], margin[i])
+        if np.isfinite(out["t"][i]):
+            out["V"][i] = np.interp(out["t"][i], t, v_np[i])
+    out["x_TF"] = np.array([np.interp(phys.TF, t, xi) for xi in x_np])
+    return out
+
+
+EVENT_DT = 1e-3  # s, half-width of the finite-difference stencil for dg/dt at liftoff
+
+
+def event_nodes(t_obs: float) -> np.ndarray:
+    """Grid nodes needed to evaluate the liftoff residual at t_obs."""
+    return np.array([t_obs - EVENT_DT, t_obs, t_obs + EVENT_DT])
+
+
+def liftoff_time_offset(t_grid, v: torch.Tensor, cl_scale, t_obs: float, phys: PhysicsConfig):
+    """Linearized liftoff-time error t_L(theta) - t_obs = -g(t_obs) / g'(t_obs),
+    g = W*cos(gamma) - L (ground attitude), from states v (B, n) on a grid that
+    contains event_nodes(t_obs). Smooth in theta (no event search), so it is
+    usable inside least squares and finite-difference sensitivities.
+    Returns (offset, gdot), each of shape (B,)."""
+    nodes = event_nodes(t_obs)
+    t_grid = np.asarray(t_grid, dtype=float)
+    idx = np.searchsorted(t_grid, nodes)
+    if not np.array_equal(t_grid[np.minimum(idx, len(t_grid) - 1)], nodes):
+        raise ValueError("t_grid must contain event_nodes(t_obs)")
+    cl = torch.as_tensor(np.atleast_1d(np.asarray(cl_scale, dtype=float))).reshape(-1, 1)
+    with torch.no_grad():
+        g = normal_force_margin(torch.as_tensor(nodes).reshape(1, 3), v[:, idx], cl, phys)
+    gdot = (g[:, 2] - g[:, 0]) / (2.0 * EVENT_DT)
+    return (-g[:, 1] / gdot).numpy(), gdot.numpy()
+
+
 def make_synthetic_data(phys: PhysicsConfig, truth: TrueParams, dcfg: DataConfig, seed: int) -> dict:
     """Dense truth + stratified noisy samples (denser near spool-up and liftoff)."""
     rng = np.random.default_rng(seed)
@@ -91,9 +160,18 @@ def make_synthetic_data(phys: PhysicsConfig, truth: TrueParams, dcfg: DataConfig
     v_data = np.interp(t_data, t_dense, v_true) + rng.normal(0.0, dcfg.sigma_v, t_data.shape)
     x_data[0], v_data[0] = phys.X0, phys.V0  # known initial condition
 
+    # Observed liftoff (wheels-off) time: a measurement with its own noise,
+    # e.g. a weight-on-wheels switch or video. Drawn last so the V/x samples
+    # are unchanged by this option.
+    t_liftoff_obs = None
+    if dcfg.observe_liftoff:
+        ev = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys)
+        t_liftoff_obs = float(ev["t"][0] + rng.normal(0.0, dcfg.sigma_t_liftoff))
+
     return {
         "t_dense": t_dense, "x_true": x_true, "v_true": v_true,
         "t_data": t_data, "x_data": x_data, "v_data": v_data,
+        "t_liftoff_obs": t_liftoff_obs, "sigma_t_liftoff": dcfg.sigma_t_liftoff,
     }
 
 
@@ -114,4 +192,5 @@ def load_csv(path: str) -> dict:
         "x_data": np.asarray(raw["x"], dtype=float)[order],
         "v_data": np.asarray(raw["V"], dtype=float)[order],
         "t_dense": None, "x_true": None, "v_true": None,
+        "t_liftoff_obs": None, "sigma_t_liftoff": None,  # set via the CLI if measured
     }

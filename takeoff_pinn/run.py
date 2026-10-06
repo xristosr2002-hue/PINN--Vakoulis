@@ -31,7 +31,12 @@ def main(argv=None) -> int:
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--csv", default=None, help="optional CSV with columns t,x,V")
     ap.add_argument("--estimate-cl", action="store_true",
-                    help="degeneracy ablation: also estimate cl_scale")
+                    help="also estimate cl_scale (identifiable only with an observed liftoff "
+                         "time; otherwise a degeneracy ablation)")
+    ap.add_argument("--t-liftoff", type=float, default=None,
+                    help="measured liftoff (wheels-off) time [s] for --csv data")
+    ap.add_argument("--sigma-t-liftoff", type=float, default=0.02,
+                    help="timing uncertainty of --t-liftoff [s]")
     args = ap.parse_args(argv)
 
     exp = build_preset(args.preset)
@@ -42,6 +47,7 @@ def main(argv=None) -> int:
     if args.csv:
         exp.data_csv = args.csv
     exp.space.estimate_cl = bool(args.estimate_cl)
+    exp.liftoff_time, exp.liftoff_sigma = args.t_liftoff, args.sigma_t_liftoff
 
     results = run_experiment(exp)
     save_all(results["fit"], results["history"], results["data"], results["uq"],

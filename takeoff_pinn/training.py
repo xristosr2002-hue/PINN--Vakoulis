@@ -13,7 +13,7 @@ from .collocation import make_collocation, topk_residual_points
 from .config import ExperimentConfig, seed_everything
 from .data import load_csv, make_synthetic_data, train_val_split
 from .evaluate import compute_metrics, evaluate_model, predict_liftoff
-from .identifiability import (identifiability_report, kappa_gradient,
+from .identifiability import (event_sensitivity, identifiability_report, kappa_gradient,
                               lumped_drag_coefficient, parameter_covariance,
                               sensitivity_matrix)
 from .losses import compute_loss, huber_mean
@@ -56,7 +56,7 @@ def pretrain(model, t_train, x_train, v_train, scales, tc) -> None:
         opt.step()
 
 
-def train_restart(restart_id: int, data: dict, exp: ExperimentConfig):
+def train_restart(restart_id: int, data: dict, exp: ExperimentConfig, liftoff: dict | None = None):
     phys, space, tc = exp.physics, exp.space, exp.train
     rng = seed_everything(tc.seed + 1000 * restart_id)
 
@@ -72,10 +72,15 @@ def train_restart(restart_id: int, data: dict, exp: ExperimentConfig):
 
     theta0, oe_info = output_error_fit(data["t_data"][tr_idx], data["x_data"][tr_idx],
                                        data["v_data"][tr_idx], phys, space, tc,
-                                       seed=restart_id)
+                                       seed=restart_id, liftoff=liftoff)
     print(f"restart {restart_id + 1}: OE init "
-          f"mu={theta0['mu']:.5f} cd={theta0['cd_scale']:.4f} eta={theta0['eta']:.4f} "
-          f"(loss={oe_info['loss']:.3e})")
+          f"mu={theta0['mu']:.5f} cd={theta0['cd_scale']:.4f} cl={theta0['cl_scale']:.4f} "
+          f"eta={theta0['eta']:.4f} (loss={oe_info['loss']:.3e})")
+    if liftoff is not None:
+        n_v = len(tr_idx)
+        s_v = float(np.std(np.asarray(oe_info["residual_data"])[:n_v]))  # normalized V noise
+        scales["event"] = {"t": liftoff["t"], "sigma_g": oe_info["sigma_g"],
+                           "weight": 0.5 * s_v**2 / n_v}
     oe_info["theta"] = theta0
     model = TakeoffPINN(phys, space, jitter=float(restart_id))
     _inject_theta(model, theta0)
@@ -166,10 +171,19 @@ def run_experiment(exp: ExperimentConfig) -> dict:
 
     data = (load_csv(exp.data_csv) if exp.data_csv
             else make_synthetic_data(exp.physics, exp.truth, exp.data, exp.train.seed))
+    if exp.data_csv and exp.liftoff_time is not None:
+        data["t_liftoff_obs"], data["sigma_t_liftoff"] = exp.liftoff_time, exp.liftoff_sigma
+    liftoff = None
+    if exp.space.estimate_cl:
+        if data.get("t_liftoff_obs") is not None:
+            liftoff = {"t": data["t_liftoff_obs"], "sigma": data["sigma_t_liftoff"]}
+        else:
+            print("WARNING: estimating c_L without an observed liftoff time: c_D and c_L "
+                  "are then not separately identifiable (degeneracy ablation only).")
 
     best = None
     for r in range(exp.train.n_restarts):
-        model, history, score, scales, oe_info, diag = train_restart(r, data, exp)
+        model, history, score, scales, oe_info, diag = train_restart(r, data, exp, liftoff)
         print(f"restart {r + 1}/{exp.train.n_restarts}: val score = {score:.4e} "
               f"(before L-BFGS {diag['val_pre_lbfgs']:.4e})")
         if best is None or score < best[2]:
@@ -182,7 +196,7 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     # Classical output-error baseline on the same data: does the PINN stage
     # add anything to the parameters / takeoff prediction beyond its initializer?
     th_oe = oe_info["theta"]
-    for k in ("mu", "cd_scale", "eta"):
+    for k in ("mu", "cd_scale", "cl_scale", "eta"):
         metrics[f"{k}_oe"] = th_oe[k]
     metrics["kappa_oe"] = lumped_drag_coefficient(th_oe["cd_scale"], th_oe["cl_scale"],
                                                   th_oe["mu"], exp.physics)
@@ -196,8 +210,10 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     S, names = sensitivity_matrix(theta_hat, oe_info["t"], exp.physics, exp.space,
                                   oe_info["scales"])
     ident = identifiability_report(S, names)
+    S_known = (event_sensitivity(theta_hat, liftoff, exp.physics, exp.space)
+               if liftoff is not None else None)
     cov = parameter_covariance(S, np.asarray(oe_info["residual_data"]),
-                               weights=oe_info.get("weights"))
+                               weights=oe_info.get("weights"), S_known=S_known)
     uq = propagate_uncertainty(theta_hat, cov, names, exp.space, exp.physics,
                                n_samples=exp.uq.n_samples, seed=exp.train.seed,
                                sigma_rpm=exp.uq.sigma_rpm,
@@ -205,6 +221,12 @@ def run_experiment(exp: ExperimentConfig) -> dict:
 
     metrics["identifiability_condition_number"] = ident["condition_number"]
     metrics["identifiability_max_corr"] = ident["max_corr"]
+    sd = np.sqrt(np.clip(np.diag(cov), 1e-300, None))
+    pcorr = cov / np.outer(sd, sd)
+    metrics["param_corr_max"] = float(np.max(np.abs(pcorr - np.eye(len(names)))))
+    metrics["liftoff_observed"] = liftoff is not None
+    if liftoff is not None:
+        metrics["t_liftoff_obs"] = liftoff["t"]
     sigma = np.sqrt(np.clip(np.diag(cov), 0.0, None))
     for j, name in enumerate(names):
         metrics[f"{name}_sigma"] = float(sigma[j])

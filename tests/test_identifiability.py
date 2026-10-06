@@ -167,3 +167,22 @@ def test_slide_cd_cl_still_degenerate_in_linearization():
                                   {"v": 13.0, "x": 113.0})
     rep = identifiability_report(S, names)
     assert abs(rep["corr"][names.index("cd_scale")][names.index("cl_scale")]) > 0.9999
+
+
+def test_liftoff_row_resolves_cd_cl_degeneracy():
+    """Linearized Fisher: adding the observed liftoff time makes (c_D, c_L)
+    separately identifiable (sigma(c_L) collapses from O(1) to O(1e-3))."""
+    from takeoff_pinn.data import predict_liftoff
+    from takeoff_pinn.identifiability import event_sensitivity, parameter_covariance
+
+    space = ParamSpace(estimate_cl=True)
+    t = np.linspace(0.0, SLIDE.TF, 160)
+    S, names = sensitivity_matrix(THETA, t, SLIDE, space, {"v": 13.0, "x": 113.0})
+    r = np.r_[np.full(160, 0.10 / 13.0), np.full(160, 0.08 / 113.0)]  # |r| = noise level
+    w = 1.0 / r**2
+    t_obs = predict_liftoff(THETA["mu"], THETA["cd_scale"], THETA["cl_scale"], THETA["eta"], SLIDE)["t"][0]
+    K = event_sensitivity(THETA, {"t": t_obs, "sigma": 0.02}, SLIDE, space)
+    j = names.index("cl_scale")
+    sd_without = np.sqrt(parameter_covariance(S, r, weights=w)[j, j])
+    sd_with = np.sqrt(parameter_covariance(S, r, weights=w, S_known=K)[j, j])
+    assert sd_without > 0.1 and sd_with < 0.01

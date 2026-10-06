@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from .config import ParamSpace, PhysicsConfig, TrainConfig
-from .physics import rhs_accel
+from .physics import normal_force_margin, rhs_accel
 
 
 def grad_wrt(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -66,16 +66,29 @@ def compute_loss(model, t_data, x_data, v_data, t_phys, epoch,
     if space.estimate_cl:
         loss_prior = loss_prior + ((cl - space.prior_cl) / space.prior_sigma_cl) ** 2
 
+    # Observed liftoff (C9): g = W*cos(gamma) - L must vanish at t_obs. Weighted
+    # like one more data point of the V channel, i.e. 0.5*s_v^2/n per unit
+    # (g/sigma_g)^2, so it carries exactly its likelihood share of information.
+    ev = scales.get("event")
+    if ev is not None:
+        t_e = torch.full((1, 1), ev["t"], dtype=t_data.dtype)
+        _, v_e = model(t_e)
+        g = normal_force_margin(t_e, v_e, cl, phys)
+        loss_event = ev["weight"] * ((g / ev["sigma_g"]) ** 2).sum()
+    else:
+        loss_event = torch.zeros((), dtype=t_data.dtype)
+
     ramp = physics_ramp(epoch, tc)
     w_pr = prior_weight(epoch, tc)
     total = (tc.w_v * loss_v + tc.w_x * loss_x
              + tc.w_dyn * ramp * loss_dyn + tc.w_kin * ramp * loss_kin
-             + w_pr * loss_prior)
+             + w_pr * loss_prior + loss_event)
 
     parts = {
         "total": float(total.detach()), "v_data": float(loss_v.detach()),
         "x_data": float(loss_x.detach()), "dyn": float(loss_dyn.detach()),
         "kin": float(loss_kin.detach()), "prior": float(loss_prior.detach()),
+        "event": float(loss_event.detach()),
         "ramp": ramp, "w_prior": w_pr,
     }
     return total, parts

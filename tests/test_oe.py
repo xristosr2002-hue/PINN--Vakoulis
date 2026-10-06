@@ -48,3 +48,25 @@ def test_unweighted_oe_reports_no_weights():
     _, info = output_error_fit(d["t_data"], d["x_data"], d["v_data"],
                                PHYS, ParamSpace(), TrainConfig(oe_weighted=False), seed=0)
     assert info["weights"] is None
+
+
+def test_liftoff_observation_requires_weighted_oe():
+    import pytest
+
+    d = make_synthetic_data(PHYS, TRUTH, DataConfig(n_data=40), seed=6)
+    with pytest.raises(ValueError):
+        output_error_fit(d["t_data"], d["x_data"], d["v_data"], PHYS, ParamSpace(),
+                         TrainConfig(oe_weighted=False), liftoff={"t": 13.5, "sigma": 0.02})
+
+
+def test_observed_liftoff_identifies_cl_from_off_truth_start():
+    """C9: with the liftoff time observed, c_L is recovered (start 5 % off truth)."""
+    d = make_synthetic_data(PHYS, TRUTH, DataConfig(n_data=80, sigma_v=0.02, sigma_x=0.02,
+                                                    sigma_t_liftoff=0.005), seed=5)
+    space = ParamSpace(estimate_cl=True, prior_cl=1.05)
+    theta, info = output_error_fit(d["t_data"], d["x_data"], d["v_data"], PHYS, space,
+                                   TrainConfig(oe_weighted=True),
+                                   liftoff={"t": d["t_liftoff_obs"], "sigma": 0.005})
+    assert abs(theta["cl_scale"] - TRUTH.cl_scale) < 0.01
+    assert abs(theta["cd_scale"] - TRUTH.cd_scale) < 0.05
+    assert info["sigma_g"] > 0 and abs(info["residual_event"]) < 3.0

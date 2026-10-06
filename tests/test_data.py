@@ -59,3 +59,27 @@ def test_train_val_split_disjoint_and_complete():
     tr, va = train_val_split(100)
     assert set(tr).isdisjoint(va) and len(tr) + len(va) == 100
     assert 0 in tr  # keep the t=0 anchor point in training
+
+
+def test_liftoff_observation_is_drawn_last_and_near_truth():
+    """Adding the liftoff measurement must not change the V/x samples."""
+    from takeoff_pinn.data import predict_liftoff
+
+    on = make_synthetic_data(PHYS, TRUTH, DataConfig(observe_liftoff=True), seed=11)
+    off = make_synthetic_data(PHYS, TRUTH, DataConfig(observe_liftoff=False), seed=11)
+    assert np.array_equal(on["v_data"], off["v_data"]) and np.array_equal(on["x_data"], off["x_data"])
+    assert off["t_liftoff_obs"] is None
+    t_true = predict_liftoff(TRUTH.mu, TRUTH.cd_scale, TRUTH.cl_scale, TRUTH.eta, PHYS)["t"][0]
+    assert abs(on["t_liftoff_obs"] - t_true) < 5 * DataConfig().sigma_t_liftoff
+
+
+def test_linearized_liftoff_offset_matches_event_shift():
+    from takeoff_pinn.data import event_nodes, fine_grid, liftoff_time_offset, predict_liftoff
+
+    t_obs = predict_liftoff(TRUTH.mu, TRUTH.cd_scale, TRUTH.cl_scale, TRUTH.eta, PHYS)["t"][0]
+    mu = TRUTH.mu * 1.03
+    t_grid = fine_grid(event_nodes(t_obs), t_obs + 0.01)
+    _, v = integrate_rk4(t_grid, mu, TRUTH.cd_scale, TRUTH.cl_scale, TRUTH.eta, PHYS)
+    offset, _ = liftoff_time_offset(t_grid, v, TRUTH.cl_scale, t_obs, PHYS)
+    exact = predict_liftoff(mu, TRUTH.cd_scale, TRUTH.cl_scale, TRUTH.eta, PHYS)["t"][0] - t_obs
+    assert abs(float(offset[0]) - exact) < 0.05 * abs(exact)

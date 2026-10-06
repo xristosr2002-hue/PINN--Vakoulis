@@ -4,52 +4,11 @@ import torch
 
 from .config import PhysicsConfig, TrueParams
 from .identifiability import lumped_drag_coefficient
-from .data import integrate_rk4
+from .data import first_event, predict_liftoff  # noqa: F401  (re-exported)
 from .losses import grad_wrt
 from .physics import normal_force_margin, rhs_accel
 
-
-def first_event(t, x, g):
-    """First time the event function g drops to <= 0 (from > 0), with linear
-    interpolation of t and x; (nan, nan) if it never does on the grid."""
-    t, x, g = (np.asarray(a, dtype=float) for a in (t, x, g))
-    idx = np.where(g <= 0.0)[0]
-    if len(idx) == 0:
-        return float("nan"), float("nan")
-    j = int(idx[0])
-    if j == 0:
-        return float(t[0]), float(x[0])
-    frac = float(np.clip(g[j - 1] / (g[j - 1] - g[j]), 0.0, 1.0))
-    return (float(t[j - 1] + frac * (t[j] - t[j - 1])),
-            float(x[j - 1] + frac * (x[j] - x[j - 1])))
-
-
-def predict_liftoff(mu, cd_scale, cl_scale, eta, phys: PhysicsConfig,
-                    rpm_offset=0.0, headwind_offset=0.0, horizon: float = 2.0,
-                    dt: float = 0.01) -> dict:
-    """Liftoff (L = W*cos(gamma)) by forward RK4 with the given parameters,
-    integrated up to horizon*TF so events after the record end are still
-    found. Batched over parameter sets; returns arrays of t, x, V at liftoff
-    and x at TF."""
-    t = np.linspace(0.0, horizon * phys.TF, int(round(horizon * phys.TF / dt)) + 1)
-    batch = [torch.as_tensor(np.atleast_1d(np.asarray(a, dtype=float)))
-             for a in (mu, cd_scale, cl_scale, eta, rpm_offset, headwind_offset)]
-    B = max(b.numel() for b in batch)
-    mu_b, cd_b, cl_b, eta_b, rpm_b, hw_b = (b.expand(B) if b.numel() == 1 else b for b in batch)
-    x, v = integrate_rk4(t, mu_b, cd_b, cl_b, eta_b, phys,
-                         rpm_offset=rpm_b, headwind_offset=hw_b)
-    with torch.no_grad():
-        margin = normal_force_margin(torch.as_tensor(t).reshape(1, -1), v,
-                                     cl_b.reshape(-1, 1), phys,
-                                     headwind_offset=hw_b.reshape(-1, 1)).numpy()
-    x_np, v_np = x.numpy(), v.numpy()
-    out = {"t": np.full(B, np.nan), "x": np.full(B, np.nan), "V": np.full(B, np.nan)}
-    for i in range(B):
-        out["t"][i], out["x"][i] = first_event(t, x_np[i], margin[i])
-        if np.isfinite(out["t"][i]):
-            out["V"][i] = np.interp(out["t"][i], t, v_np[i])
-    out["x_TF"] = np.array([np.interp(phys.TF, t, xi) for xi in x_np])
-    return out
+GEN_HEADWIND = 2.0  # m/s, generalization case (steady headwind)
 
 
 def evaluate_model(model, phys: PhysicsConfig, n: int = 1000) -> dict:
@@ -106,6 +65,18 @@ def compute_metrics(fit: dict, data: dict, truth: TrueParams | None, phys: Physi
             m["liftoff_time_abs_err"] = abs(m["t_liftoff_pred"] - m["t_liftoff_true"])
             m["ground_roll_abs_err"] = abs(m["x_liftoff_pred"] - m["x_liftoff_true"])
             m["ground_roll_pct_err"] = 100.0 * m["ground_roll_abs_err"] / abs(m["x_liftoff_true"])
+    # Generalization: the same vehicle taking off into a steady +GEN_HEADWIND
+    # m/s headwind, a condition the record never saw. Liftoff is set by
+    # airspeed, so only correct aerodynamics (not merely a good fit) predicts it.
+    gen = predict_liftoff(fit["mu"], fit["cd_scale"], fit["cl_scale"], fit["eta"], phys,
+                          headwind_offset=GEN_HEADWIND)
+    m["x_liftoff_gen_pred"] = float(gen["x"][0])
+    if truth is not None:
+        gref = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys,
+                               headwind_offset=GEN_HEADWIND)
+        m["x_liftoff_gen_true"] = float(gref["x"][0])
+        m["gen_ground_roll_pct_err"] = (100.0 * abs(m["x_liftoff_gen_pred"] - m["x_liftoff_gen_true"])
+                                        / m["x_liftoff_gen_true"])
     for name in ("mu", "cd_scale", "cl_scale", "eta"):
         m[name] = fit[name]
         if truth is not None:

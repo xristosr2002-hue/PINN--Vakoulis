@@ -52,3 +52,17 @@ def test_run_experiment_smoke(tmp_path):
     # classical output-error baseline reported alongside the PINN
     for key in ("mu_oe", "cd_scale_oe", "eta_oe", "kappa_oe", "x_liftoff_oe"):
         assert key in m and np.isfinite(m[key])
+
+
+def test_run_experiment_with_observed_liftoff_estimates_cl(tmp_path):
+    """C9 path end to end: weighted OE + liftoff row + PINN event term."""
+    exp = _quick_cfg(tmp_path)
+    exp.name = "smoke_c9"
+    exp.train.oe_weighted = True
+    exp.space.estimate_cl = True
+    exp.space.prior_cl = 1.05
+    m = run_experiment(exp)["metrics"]
+    assert m["liftoff_observed"] is True
+    assert "cl_scale_sigma" in m and 0.0 < m["cl_scale_sigma"] < 0.05
+    assert abs(m["cl_scale_oe"] - 1.0) < 0.03  # OE recovers c_L from the 1.05 start
+    assert np.isfinite(m["gen_ground_roll_pct_err"])

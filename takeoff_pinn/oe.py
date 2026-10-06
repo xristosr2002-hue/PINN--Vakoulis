@@ -4,7 +4,7 @@ import torch
 from scipy.optimize import least_squares
 
 from .config import ParamSpace, PhysicsConfig, TrainConfig
-from .data import fine_grid, integrate_rk4
+from .data import event_nodes, fine_grid, integrate_rk4, liftoff_time_offset
 from .identifiability import _BOUNDS_KEYS, free_parameter_names
 
 _PRIOR_KEYS = {"mu": "prior_mu", "cd_scale": "prior_cd",
@@ -12,7 +12,13 @@ _PRIOR_KEYS = {"mu": "prior_mu", "cd_scale": "prior_cd",
 
 
 def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSpace,
-                     tc: TrainConfig, seed: int = 0):
+                     tc: TrainConfig, seed: int = 0, liftoff: dict | None = None):
+    """Output-error estimate of the free parameters from V/x samples and,
+    optionally, an observed liftoff time liftoff = {"t": t_obs, "sigma": s_t}.
+    The liftoff row has a known variance, so it requires the noise-weighted
+    (maximum-likelihood) formulation."""
+    if liftoff is not None and not tc.oe_weighted:
+        raise ValueError("a liftoff observation requires TrainConfig.oe_weighted=True")
     t_np = np.asarray(t_data, dtype=float)
     order = np.argsort(t_np)
     t_np = t_np[order]
@@ -22,7 +28,11 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
     # Integrating on the raw (gappy) data grid -- as the legacy OE stage did --
     # injects O(dt^4) RK4 error larger than the parameter effects being fitted,
     # which biases the estimate along the mu-eta valley.
-    t_fine = fine_grid(t_np, phys.TF)
+    if liftoff is None:
+        t_fine = fine_grid(t_np, phys.TF)
+    else:
+        nodes = event_nodes(liftoff["t"])
+        t_fine = fine_grid(np.union1d(t_np, nodes), max(phys.TF, nodes[-1]))
 
     v_scale = max(1.0, float(np.nanmax(np.abs(v_np))))
     x_scale = max(1.0, float(np.nanmax(np.abs(x_np))))
@@ -53,6 +63,9 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
             rv = (np.interp(t_np, t_fine, vb) - v_np) / v_scale
             rx = (np.interp(t_np, t_fine, xb) - x_np) / x_scale
             rows.append(np.concatenate([rv, rx]))
+        if liftoff is not None:  # one row in units of the timing noise
+            offset, _ = liftoff_time_offset(t_fine, v_sim, th["cl_scale"], liftoff["t"], phys)
+            rows = [np.append(r, o / liftoff["sigma"]) for r, o in zip(rows, offset)]
         # Pure maximum-likelihood: no prior residual. The legacy OE prior
         # (weight 2e-3) was ~100x stiffer than the data curvature along the
         # mu-eta valley, so it silently dictated the estimate there. Bounds
@@ -83,7 +96,9 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
                              max_nfev=tc.oe_max_nfev, xtol=1e-10, ftol=1e-10, gtol=1e-10).x
 
     n_rows = 2 * len(t_np)
-    weights = np.ones(n_rows)
+    # First pass: unit weights on V/x and the liftoff row switched off (its
+    # sigma units are not comparable to the normalized V/x residuals yet).
+    weights = np.ones(n_rows) if liftoff is None else np.append(np.ones(n_rows), 0.0)
     z = solve(z0, weights)
     if tc.oe_weighted:
         # Output-error relaxation (Klein & Morelli): estimate the per-channel
@@ -91,16 +106,28 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
         # repeat. The normalized V and x noise differ ~5x, so equal weights
         # waste the information in the cleaner channel.
         for _ in range(tc.oe_relax_iters):
-            r = resid(z)
+            r = resid(z)[:n_rows]
             var = np.concatenate([np.full(len(b), max(np.mean(b**2), 1e-300))
                                   for b in np.split(r, 2)])
-            weights = 1.0 / var
+            weights = 1.0 / var if liftoff is None else np.append(1.0 / var, 1.0)
             z = solve(z, weights)
     theta = theta_of(z)
     fvec = resid(z)
-    info = {"loss": float(np.mean(fvec**2)),
+    info = {"loss": float(np.mean(fvec[:n_rows]**2)),
             "residual_data": fvec[:n_rows],
-            "weights": weights if tc.oe_weighted else None,
+            "weights": weights[:n_rows] if tc.oe_weighted else None,
+            "liftoff": liftoff,
+            "residual_event": float(fvec[n_rows]) if liftoff is not None else None,
+            "sigma_g": _event_sigma_g(theta, t_fine, liftoff, phys) if liftoff is not None else None,
             "t": t_np,  # sample times of residual_data rows ([V; x] blocks, sorted)
             "scales": {"v": v_scale, "x": x_scale}}
     return theta, info
+
+
+def _event_sigma_g(theta: dict, t_fine, liftoff: dict, phys: PhysicsConfig) -> float:
+    """Noise of g = W*cos(gamma) - L at t_obs implied by the timing noise:
+    |dg/dt| * sigma_t (used to weight the PINN's liftoff term)."""
+    _, v = integrate_rk4(t_fine, theta["mu"], theta["cd_scale"], theta["cl_scale"],
+                         theta["eta"], phys)
+    _, gdot = liftoff_time_offset(t_fine, v, theta["cl_scale"], liftoff["t"], phys)
+    return float(abs(gdot[0]) * liftoff["sigma"])

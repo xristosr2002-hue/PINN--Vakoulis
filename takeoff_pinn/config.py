@@ -86,6 +86,10 @@ class DataConfig:
     # first two (v1 hard-coded 3.0 s / 6.8 s, i.e. these fractions of TF = 8).
     strata_edges: tuple = (0.375, 0.85)
     strata_shares: tuple = (0.45, 0.35)
+    # Observed liftoff time (C9): the record ends at wheels-off, which a
+    # weight-on-wheels switch or 50 fps video times to ~0.02 s.
+    observe_liftoff: bool = True
+    sigma_t_liftoff: float = 0.02  # s
 
 
 @dataclass
@@ -145,6 +149,9 @@ class ExperimentConfig:
     train: TrainConfig = field(default_factory=TrainConfig)
     uq: UQConfig = field(default_factory=UQConfig)
     data_csv: str | None = None
+    # Measured liftoff (wheels-off) time for CSV data, and its timing sigma [s].
+    liftoff_time: float | None = None
+    liftoff_sigma: float = 0.02
 
     @property
     def run_dir(self) -> str:
