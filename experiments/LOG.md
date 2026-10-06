@@ -164,3 +164,51 @@ OE stage.
   initializer (κ bias +5e-4, correlation with the x_LOF error 0.87). Its data loss weights V and x by signal
   maxima rather than noise, so its optimum is not the maximum-likelihood one. This was already present
   in v1 (E07a bias 0.46 vs 0.16 m) and is now clearly exposed.
+
+---
+
+## C9 — Observed liftoff time as a measurement (Agent 2 proposal; Agents 1, 3 and 4 reviewed)
+
+- **CHANGE (opt-in, `ParamSpace.estimate_cl` + an observed liftoff time):** the synthetic generator draws
+  t_obs = t_L + N(0, σ_t), with σ_t = 0.02 s (wheels-off switch or video). It is drawn last, so V/x are unchanged, and
+  it is a noisy measurement, not truth leakage. The weighted OE gets one row: the linearized liftoff-time
+  error −g(t_obs)/ġ(t_obs) in σ_t units, with g = W·cosγ − L. The covariance takes it as a known-variance
+  row (`parameter_covariance(S_known=...)`). The PINN gets a likelihood-consistent event term when it
+  trains c_L. The CLI gains `--t-liftoff` / `--sigma-t-liftoff` for real data. Also adds a +2 m/s headwind
+  generalization metric and `param_corr_max`.
+- **WHY (Agent 4 finding):** a 5 % error in the assumed c_L shifts the predicted ground roll by
+  −12.5 % / +14.4 % while the record is fitted almost equally well (κ unchanged). Every result up to
+  E07 fixed c_L at its *true* value, which is optimistic and impossible with real data.
+- **Evidence before implementing (linearized Fisher):** σ(c_L) 1.38 → 0.0017 (σ_t = 0.02 s) and 0.0047 (σ_t = 0.1 s).
+  σ(c_D) 0.57 → 0.033, equal to the "c_L known" value. Condition number 1.3e9 → 1e6.
+- **Checks:** the linearized event residual matches the exact event shift (0.182 vs 0.1825 s for +6 % μ).
+  OE recovers c_L = 1.0009 from a 1.05 start (seed 7). Tests 58/58.
+- **DECISION:** Pending E08 (multi-seed, realistic c_L error).
+
+---
+
+## C10 / E09 — Stop the PINN stage degrading its maximum-likelihood initializer
+
+Same 10 seeds; E09_ref reproduces E07b bit-for-bit (C9 code inactive, so the regression check passes).
+
+| metric (10 seeds) | E09_ref (PINN trains θ) | E09a data_weighting=noise | **E09b θ frozen at OE** |
+|---|---|---|---|
+| μ / c_D / η RMSE | 0.0067 / 0.024 / 0.020 | 0.0067 / 0.063 / 0.029 | **0.0058 / 0.026 / 0.019** |
+| κ RMSE (bias) | 0.00071 (+0.00052) | 0.0027 (−0.0022) | **0.00024 (+0.00005)** |
+| κ 68 % coverage | 0 / 10 | 1 / 10 | z-std 0.64 |
+| x_LOF error RMSE (bias) | 1.17 m (+0.93) | 6.38 m (−4.61) | **0.24 m (−0.05)** |
+| ground-roll error | 0.95 % | 4.06 % | **0.19 %** |
+| +2 m/s headwind generalization error | 1.30 % | 5.68 % | **0.26 %** |
+| liftoff-time error | 0.079 s | 0.333 s | **0.017 s** |
+| V / x RMSE vs truth | 0.0150 / 0.061 | 0.063 / 0.054 | **0.0070 / 0.023** |
+| r_dyn / r_kin RMS | 0.0090 / 0.0112 | 0.042 / 0.077 | 0.0094 / 0.0124 |
+
+- **E09a (Agent 1's likelihood-consistent PINN data weights): REJECTED.** Up-weighting x by about 100× tips the
+  data/physics balance: the network fits x noise against the equations, so residuals rise 5× and θ drifts.
+  Fixing that would need re-tuned physics weights (more unjustified hyperparameters).
+- **E09b (Agent 3's minimal option): ACCEPTED, now the default** (`pinn_trains_params = False`). It is better on every metric.
+- **Agent 4 follow-up, reported plainly (Rule 10):** with θ from OE, integrating the ODE with θ_OE gives
+  V/x RMSE **0.0029 / 0.0081** against the PINN's 0.0070 / 0.023. On this well-specified synthetic problem
+  ("inverse crime"), the classical output-error method beats the PINN for parameters *and* states.
+  The PINN's possible value (robustness to model-form error, residual diagnostics) can only show up
+  when the model is wrong → E10.

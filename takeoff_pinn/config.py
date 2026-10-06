@@ -127,14 +127,16 @@ class TrainConfig:
     # per-channel variance; see LOG C8 for the evidence behind the default.
     oe_weighted: bool = True
     oe_relax_iters: int = 2
-    # C10: weighting of the PINN's V and x data terms. "scale" (v1): residuals
+    # Weighting of the PINN's V and x data terms. "scale" (v1): residuals
     # normalized by signal maxima. "noise": x additionally weighted by
-    # (sigma_v/sigma_x)^2 (OE-estimated, in the same normalization), so both
-    # channels carry their likelihood share, as in the weighted OE.
+    # (sigma_v/sigma_x)^2 -- REJECTED in E09a (upsets the data/physics balance:
+    # kappa RMSE x3.8, takeoff error x5.5); kept only to reproduce that result.
     data_weighting: str = "scale"
-    # C10 alternative: train the physical parameters in the PINN stage (v1),
-    # or keep them at the OE estimate (PINN = physics-constrained state fit).
-    pinn_trains_params: bool = True
+    # Train the physical parameters in the PINN stage (v1), or keep them at the
+    # maximum-likelihood OE estimate (default since E09b: the PINN's non-ML loss
+    # biased kappa by > 1 sigma in every seed and degraded the takeoff
+    # prediction 5x). The PINN is then a physics-constrained state estimator.
+    pinn_trains_params: bool = False
 
 
 @dataclass
