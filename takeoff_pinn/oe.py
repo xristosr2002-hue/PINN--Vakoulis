@@ -76,12 +76,31 @@ def output_error_fit(t_data, x_data, v_data, phys: PhysicsConfig, space: ParamSp
     p0 = np.clip((priors - lows) / (highs - lows), 1e-6, 1 - 1e-6)
     jitter = np.array([1.5, -2.0, 1.0]) if len(names) == 3 else np.array([1.5, -2.0, -0.8, 1.0])
     z0 = np.log(p0 / (1.0 - p0)) + 0.1 * seed * jitter
-    res = least_squares(resid, z0, jac=jac, max_nfev=tc.oe_max_nfev,
-                        xtol=1e-10, ftol=1e-10, gtol=1e-10)
-    theta = theta_of(res.x)
-    fvec = resid(res.x)
+    def solve(z_start, row_w):
+        sw = np.sqrt(row_w)
+        return least_squares(lambda z: sw * resid(z), z_start,
+                             jac=lambda z: sw[:, None] * jac(z),
+                             max_nfev=tc.oe_max_nfev, xtol=1e-10, ftol=1e-10, gtol=1e-10).x
+
+    n_rows = 2 * len(t_np)
+    weights = np.ones(n_rows)
+    z = solve(z0, weights)
+    if tc.oe_weighted:
+        # Output-error relaxation (Klein & Morelli): estimate the per-channel
+        # noise variance R from the residuals, refit minimizing r^T R^-1 r,
+        # repeat. The normalized V and x noise differ ~5x, so equal weights
+        # waste the information in the cleaner channel.
+        for _ in range(tc.oe_relax_iters):
+            r = resid(z)
+            var = np.concatenate([np.full(len(b), max(np.mean(b**2), 1e-300))
+                                  for b in np.split(r, 2)])
+            weights = 1.0 / var
+            z = solve(z, weights)
+    theta = theta_of(z)
+    fvec = resid(z)
     info = {"loss": float(np.mean(fvec**2)),
-            "residual_data": fvec[: 2 * len(t_np)],
+            "residual_data": fvec[:n_rows],
+            "weights": weights if tc.oe_weighted else None,
             "t": t_np,  # sample times of residual_data rows ([V; x] blocks, sorted)
             "scales": {"v": v_scale, "x": x_scale}}
     return theta, info

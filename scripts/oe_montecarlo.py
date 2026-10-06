@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import torch
@@ -46,6 +47,15 @@ def one_seed(seed: int, exp: ExperimentConfig) -> dict:
     }
 
 
+def _worker(seed: int, weighted: bool) -> dict:
+    """Process-pool entry: single-threaded torch, float64, fresh config."""
+    torch.set_num_threads(1)
+    torch.set_default_dtype(torch.float64)
+    exp = ExperimentConfig()
+    exp.train.oe_weighted = weighted
+    return one_seed(seed, exp)
+
+
 def summarize(rows: list[dict]) -> dict:
     names = rows[0]["names"]
     err = np.array([r["err"] for r in rows])
@@ -68,14 +78,25 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=40)
     ap.add_argument("--first-seed", type=int, default=100)
+    ap.add_argument("--weighted", type=int, choices=(0, 1), default=None,
+                    help="override TrainConfig.oe_weighted")
+    ap.add_argument("--jobs", type=int, default=1, help="parallel worker processes")
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
     torch.set_default_dtype(torch.float64)
     exp = ExperimentConfig()
+    if args.weighted is not None:
+        exp.train.oe_weighted = bool(args.weighted)
     t0 = time.time()
-    rows = [one_seed(s, exp) for s in range(args.first_seed, args.first_seed + args.seeds)]
+    seeds = list(range(args.first_seed, args.first_seed + args.seeds))
+    if args.jobs > 1:
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            rows = list(pool.map(_worker, seeds, [exp.train.oe_weighted] * len(seeds)))
+    else:
+        rows = [one_seed(s, exp) for s in seeds]
     summary = summarize(rows)
+    summary["oe_weighted"] = exp.train.oe_weighted
     summary["runtime_s"] = time.time() - t0
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:

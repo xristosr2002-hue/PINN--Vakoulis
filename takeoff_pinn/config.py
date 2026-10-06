@@ -119,6 +119,10 @@ class TrainConfig:
     ramp_width: float = 180.0
     val_every: int = 25
     oe_max_nfev: int = 300
+    # Noise-weighted (maximum-likelihood) output error with estimated
+    # per-channel variance; see LOG C8 for the evidence behind the default.
+    oe_weighted: bool = False
+    oe_relax_iters: int = 2
 
 
 @dataclass
