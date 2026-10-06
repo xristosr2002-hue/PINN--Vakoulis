@@ -183,7 +183,7 @@ OE stage.
   σ(c_D) 0.57 → 0.033, equal to the "c_L known" value. Condition number 1.3e9 → 1e6.
 - **Checks:** the linearized event residual matches the exact event shift (0.182 vs 0.1825 s for +6 % μ).
   OE recovers c_L = 1.0009 from a 1.05 start (seed 7). Tests 58/58.
-- **DECISION:** Pending E08 (multi-seed, realistic c_L error).
+- **DECISION:** Accepted after E08 (below) and made the default (C11).
 
 ---
 
@@ -212,3 +212,104 @@ Same 10 seeds; E09_ref reproduces E07b bit-for-bit (C9 code inactive, so the reg
   ("inverse crime"), the classical output-error method beats the PINN for parameters *and* states.
   The PINN's possible value (robustness to model-form error, residual diagnostics) can only show up
   when the model is wrong → E10.
+
+---
+
+## E08 — Realistic c_L: fixed 5 % off vs. identified from the observed liftoff time (C9 evaluation)
+
+Same 10 seeds and v2 pipeline (weighted OE, θ frozen at OE). "c_L = truth" is E09b (optimistic, impossible with
+real data). "c_L fixed +5 %" is `space.prior_cl=1.05`. "c_L from t_LOF" is `space.prior_cl=1.05 space.estimate_cl=true` (start 5 % off).
+
+| metric (10 seeds) | c_L = truth (E09b) | **c_L fixed +5 % (E08b)** | **c_L from t_LOF (E08c)** |
+|---|---|---|---|
+| c_L RMSE (z-std) | 0 (assumed) | 0.050 | **0.0017 (0.94)** |
+| μ / c_D / η RMSE | 0.0058 / 0.0256 / 0.0192 | 0.0057 / 0.0287 / 0.0187 | 0.0058 / 0.0255 / 0.0192 |
+| κ RMSE | 0.00024 | 0.00024 | 0.00024 |
+| V / x RMSE vs truth | 0.0070 / 0.023 | 0.0078 / 0.024 | 0.0111 / 0.026 |
+| x_LOF error RMSE (bias) | 0.24 m (−0.05) | **14.27 m (−14.27)** | **0.30 m (+0.09)** |
+| ground-roll error | 0.19 % | **12.6 %** | **0.22 %** |
+| liftoff-time error | 0.017 s | 1.10 s | 0.018 s |
+| +2 m/s headwind generalization error | 0.26 % | **17.6 %** | **0.29 %** |
+| reported σ(x_LOF) param-only, z-std | 0.41 m, 0.58 | 0.34 m, **4.2** | 0.27 m, 1.09 |
+
+- **Key result (Agent 4):** with a 5 % c_L error the fit is as good as with the true c_L (same κ, same state
+  errors), yet the takeoff prediction is wrong by 12.6 % and the reported uncertainty does not see it
+  (0.34 m σ against a 14.3 m error). An assumption error outside the model cannot show up in a parametric covariance.
+- **C9 result:** the observed liftoff time recovers c_L to 0.17 % (honest σ), and μ/c_D/η are then as accurate as
+  with c_L known exactly, as the Fisher analysis predicted. Takeoff and generalization errors return to the
+  "c_L known" level, and the takeoff σ is honest (z-std 1.09).
+
+---
+
+## C11 — Default: estimate c_L whenever a liftoff time is observed; safe fallback otherwise
+
+- **CHANGE:** `ParamSpace.estimate_cl = True` and `prior_cl = 1.05` (a nominal, CFD-like value deliberately 5 % off the
+  synthetic truth, in line with the "priors ≠ truth" rule). Without an observed liftoff time, `run_experiment`
+  **falls back to c_L fixed at prior_cl** with a warning and records the switch in `config.json`, instead of
+  fitting the degenerate (c_D, c_L) direction. The CLI `--estimate-cl` is replaced by `--fix-cl`.
+- **WHY:** E08. Agent 3: the fallback protects real-data users who have no liftoff timing.
+- **Tests:** OE unit tests now state `estimate_cl=False` explicitly. A new smoke test covers the fallback.
+
+---
+
+## E10 — Model-form error in the truth: does the PINN help when the physics is wrong?
+
+- **Setup:** `data.truth_mu_speed_slope=0.02`, so the synthetic truth has rolling friction μ(1 + 0.02·V) (friction growing with
+  speed, as on grass). The identification model keeps a constant μ. Same 10 seeds. c_L is fixed at its true value
+  (the run started before C11) to isolate the friction error. Analysis: `scripts/discrepancy.py` (control: E09b).
+- **Hypotheses (Agent 1/2):** (a) the PINN, whose physics is a soft constraint, reconstructs states better than the
+  misspecified ODE rollout; (b) the PINN dynamic residual r(t) reveals the missing acceleration Δa(t).
+- **ACTUAL:**
+
+  | | OE rollout | PINN |
+  |---|---|---|
+  | V / x RMSE vs truth | **0.0181 / 0.026** | 0.0197 / 0.037 |
+  | corr(r_dyn, Δa) (R²) | — | **0.002 (−0.61)**; control 0.00 |
+  | RMS Δa / RMS r_dyn | 0.0157 m/s² | 0.0112 m/s² (floor ≈ 0.009) |
+
+  Parameters absorb the missing physics. μ +0.049 (+61 %), c_D +0.21 and η +0.14 are **pinned at the upper bound 1.05 in
+  10/10 seeds**. κ is off by 5 %, and the fit stays within the noise. Takeoff error is 2.3 %, the +2 m/s headwind case 3.9 %.
+  The parameter-only σ(x_LOF) is inflated (≈ 18 m) because the covariance is evaluated at a bound.
+- **Conclusion (reported plainly, Rule 10):** both hypotheses are **rejected** for this discrepancy. Re-fitted constant-μ physics absorbs
+  most of the error, and what remains (0.016 m/s²) is barely above the PINN's residual floor. The physics-weighted network follows the model,
+  not the data. The informative symptom is **parameters pinned at their bounds** → C12.
+
+---
+
+## C12 — Flag estimates pinned at a bound
+
+- **CHANGE:** `identifiability.params_at_bounds` and the metric `params_at_bounds`, with a warning when it is non-empty.
+- **WHY:** In E10 the misspecified model fitted the data within noise. The only visible red flag was η on its bound, where
+  the linearized covariance is meaningless, yet v2 reported a σ for it without comment.
+- **DECISION:** Keep (pure diagnostic; unit-tested).
+
+---
+
+## C13 — OE efficiency with c_L estimated (Agent 1, found while timing the final run)
+
+- **Finding:** with c_L free, the first (unweighted) OE pass leaves out the liftoff row, so it is a degenerate 4-parameter
+  fit that wandered along the c_D–c_L valley until `max_nfev` (355 s per call). Every restart also recomputed the identical OE fit.
+- **CHANGE:** c_L is held at its nominal value in the first pass and freed once the liftoff row is weighted (`solve(..., free)`).
+  `run_experiment` computes the OE fit once and shares it across restarts.
+- **ACTUAL:** OE 355 s → 24 s with the same estimate (to 5 digits). Full reference run 760 s → **135 s**. Parameters
+  identical to 1e-7.
+- **DECISION:** Keep.
+
+---
+
+## FINAL — Reference run (`experiments/final_reference`, full preset, final defaults, seed 7, sequential CPU)
+
+| quantity | estimate ± σ | truth |
+|---|---|---|
+| μ | 0.0709 ± 0.0072 | 0.080 |
+| c_D | 1.1113 ± 0.0302 | 1.150 |
+| c_L | 1.0009 ± 0.0016 | 1.000 |
+| η | 0.8802 ± 0.0234 | 0.910 |
+| κ | 0.04126 ± 0.00036 | 0.04085 |
+| t_LOF [s] | 13.499 ± 0.019 | 13.496 |
+| x_LOF [m] | 113.49 ± 0.25 (± 5.73 incl. input variability) | 113.46 |
+| x_LOF, +2 m/s headwind [m] | 91.03 | 90.98 |
+
+V / x RMSE vs truth 0.0087 m/s / 0.0508 m; r_dyn / r_kin RMS 0.0114 / 0.0108.
+No parameter at a bound. Runtime 135 s. μ, c_D and η are each about 1.3σ low *together*, which is the
+joint thrust-vs-resistance valley (parameter correlation 0.9999); κ is 1.15σ high. Over 10 seeds (E08c) σ is honest.

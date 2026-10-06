@@ -14,8 +14,10 @@ python -m takeoff_pinn.run --preset full         # reference run (~2-4 min CPU)
 python -m pytest                                 # test suite (~15 min; integration runs included)
 ```
 
-Real data: `--csv run.csv` with columns `t,x,V` (SI units, t = 0 at brake release). If the
-wheels-off time was measured, pass it: `--t-liftoff 13.48 --sigma-t-liftoff 0.02 --estimate-cl`.
+Real data: `--csv run.csv` with columns `t,x,V` (SI units, t = 0 at brake release). Pass the
+measured wheels-off time if available: `--t-liftoff 13.48 --sigma-t-liftoff 0.02`. With it, c_L is
+estimated (default); without it, c_L is fixed at its nominal value with a warning, and c_D is then
+conditional on that value (`--fix-cl` forces the fixed mode).
 The run requires the RPM/wind/slope profiles of `physics.py` to describe that test — replace
 them with the measured inputs before using real data (see *Limitations*).
 
