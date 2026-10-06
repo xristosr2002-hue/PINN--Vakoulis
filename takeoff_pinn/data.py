@@ -27,9 +27,11 @@ def integrate_rk4(
     cfg: PhysicsConfig,
     rpm_offset=0.0,
     headwind_offset=0.0,
+    mu_speed_slope: float = 0.0,
 ):
     """Classic RK4 for [x' = V, V' = rhs_accel], vectorized over a batch of
-    parameter sets. Returns (x, v) of shape (B, len(t_grid))."""
+    parameter sets. Returns (x, v) of shape (B, len(t_grid)).
+    mu_speed_slope: truth-only model-form error (see accel_from_inputs)."""
     t_np = np.asarray(t_grid, dtype=float)
     mu_b, cd_b, cl_b, eta_b = (_as_batch(p) for p in (mu, cd_scale, cl_scale, eta))
     rpm_b, hw_b = _as_batch(rpm_offset), _as_batch(headwind_offset)
@@ -49,7 +51,7 @@ def integrate_rk4(
     def f(inputs, k: int, vv: torch.Tensor) -> torch.Tensor:
         rpm, hw, gamma = (a[k] for a in inputs)
         return accel_from_inputs(vv, rpm + rpm_b, hw + hw_b, gamma,
-                                 mu_b, cd_b, cl_b, eta_b, cfg)
+                                 mu_b, cd_b, cl_b, eta_b, cfg, mu_speed_slope)
 
     vi = torch.full((B,), float(cfg.V0))
     xi = torch.full((B,), float(cfg.X0))
@@ -87,7 +89,7 @@ def first_event(t, x, g):
 
 def predict_liftoff(mu, cd_scale, cl_scale, eta, phys: PhysicsConfig,
                     rpm_offset=0.0, headwind_offset=0.0, horizon: float = 2.0,
-                    dt: float = 0.01) -> dict:
+                    dt: float = 0.01, mu_speed_slope: float = 0.0) -> dict:
     """Liftoff (L = W*cos(gamma)) by forward RK4 with the given parameters,
     integrated up to horizon*TF so events after the record end are still
     found. Batched over parameter sets; returns arrays of t, x, V at liftoff
@@ -98,7 +100,7 @@ def predict_liftoff(mu, cd_scale, cl_scale, eta, phys: PhysicsConfig,
     B = max(b.numel() for b in batch)
     mu_b, cd_b, cl_b, eta_b, rpm_b, hw_b = (b.expand(B) if b.numel() == 1 else b for b in batch)
     x, v = integrate_rk4(t, mu_b, cd_b, cl_b, eta_b, phys,
-                         rpm_offset=rpm_b, headwind_offset=hw_b)
+                         rpm_offset=rpm_b, headwind_offset=hw_b, mu_speed_slope=mu_speed_slope)
     with torch.no_grad():
         margin = normal_force_margin(torch.as_tensor(t).reshape(1, -1), v,
                                      cl_b.reshape(-1, 1), phys,
@@ -143,7 +145,9 @@ def make_synthetic_data(phys: PhysicsConfig, truth: TrueParams, dcfg: DataConfig
     """Dense truth + stratified noisy samples (denser near spool-up and liftoff)."""
     rng = np.random.default_rng(seed)
     t_dense = np.linspace(0.0, phys.TF, dcfg.n_dense)
-    x_t, v_t = integrate_rk4(t_dense, truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys)
+    k_mu = dcfg.truth_mu_speed_slope  # 0 unless a model-form error is injected (E10)
+    x_t, v_t = integrate_rk4(t_dense, truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys,
+                             mu_speed_slope=k_mu)
     x_true, v_true = x_t[0].numpy(), v_t[0].numpy()
 
     n1 = int(dcfg.strata_shares[0] * dcfg.n_data)
@@ -165,13 +169,15 @@ def make_synthetic_data(phys: PhysicsConfig, truth: TrueParams, dcfg: DataConfig
     # are unchanged by this option.
     t_liftoff_obs = None
     if dcfg.observe_liftoff:
-        ev = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys)
+        ev = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys,
+                             mu_speed_slope=k_mu)
         t_liftoff_obs = float(ev["t"][0] + rng.normal(0.0, dcfg.sigma_t_liftoff))
 
     return {
         "t_dense": t_dense, "x_true": x_true, "v_true": v_true,
         "t_data": t_data, "x_data": x_data, "v_data": v_data,
         "t_liftoff_obs": t_liftoff_obs, "sigma_t_liftoff": dcfg.sigma_t_liftoff,
+        "truth_mu_speed_slope": k_mu,
     }
 
 

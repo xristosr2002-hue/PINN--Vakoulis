@@ -80,3 +80,17 @@ def test_offsets_shift_inputs():
     base = rhs_accel(t, v, mu, cd, cl, eta, PHYS)
     more_wind = rhs_accel(t, v, mu, cd, cl, eta, PHYS, headwind_offset=1.0)
     assert float(more_wind) != float(base)  # headwind changes airspeed terms
+
+
+def test_truth_only_friction_speed_term_is_inert_at_zero_and_brakes_when_set():
+    from takeoff_pinn.physics import accel_from_inputs, exogenous_inputs
+
+    mu, cd, cl, eta = _theta()
+    t = torch.tensor([[2.0], [6.0]])
+    V = torch.tensor([[4.0], [11.0]])
+    rpm, hw, gamma = exogenous_inputs(t, PHYS)
+    a0 = accel_from_inputs(V, rpm, hw, gamma, mu, cd, cl, eta, PHYS)
+    assert torch.equal(a0, rhs_accel(t, V, mu, cd, cl, eta, PHYS))
+    assert torch.equal(a0, accel_from_inputs(V, rpm, hw, gamma, mu, cd, cl, eta, PHYS, 0.0))
+    a1 = accel_from_inputs(V, rpm, hw, gamma, mu, cd, cl, eta, PHYS, 0.02)
+    assert bool((a1 < a0).all())  # more friction at speed

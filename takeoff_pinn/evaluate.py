@@ -58,7 +58,9 @@ def compute_metrics(fit: dict, data: dict, truth: TrueParams | None, phys: Physi
     m["t_liftoff_pred"], m["x_liftoff_pred"], m["v_liftoff_pred"] = (
         float(pred[k][0]) for k in ("t", "x", "V"))
     if truth is not None:
-        ref = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys)
+        k_mu = data.get("truth_mu_speed_slope", 0.0)
+        ref = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys,
+                              mu_speed_slope=k_mu)
         m["t_liftoff_true"], m["x_liftoff_true"], m["v_liftoff_true"] = (
             float(ref[k][0]) for k in ("t", "x", "V"))
         if np.isfinite(m["t_liftoff_pred"]) and np.isfinite(m["t_liftoff_true"]):
@@ -73,7 +75,8 @@ def compute_metrics(fit: dict, data: dict, truth: TrueParams | None, phys: Physi
     m["x_liftoff_gen_pred"] = float(gen["x"][0])
     if truth is not None:
         gref = predict_liftoff(truth.mu, truth.cd_scale, truth.cl_scale, truth.eta, phys,
-                               headwind_offset=GEN_HEADWIND)
+                               headwind_offset=GEN_HEADWIND,
+                               mu_speed_slope=data.get("truth_mu_speed_slope", 0.0))
         m["x_liftoff_gen_true"] = float(gref["x"][0])
         m["gen_ground_roll_pct_err"] = (100.0 * abs(m["x_liftoff_gen_pred"] - m["x_liftoff_gen_true"])
                                         / m["x_liftoff_gen_true"])

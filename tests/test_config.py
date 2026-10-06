@@ -43,3 +43,11 @@ def test_priors_differ_from_truth():
     assert space.prior_mu != truth.mu
     assert space.prior_cd != truth.cd_scale
     assert space.prior_eta != truth.eta
+
+
+def test_config_load_roundtrip(tmp_path):
+    exp = ExperimentConfig(name="rt", out_dir=str(tmp_path))
+    exp.space.estimate_cl = True
+    exp.data.truth_mu_speed_slope = 0.02
+    loaded = ExperimentConfig.load(exp.save())
+    assert loaded == exp

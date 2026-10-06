@@ -111,9 +111,14 @@ def accel_from_inputs(
     cl_scale: torch.Tensor,
     eta: torch.Tensor,
     cfg: PhysicsConfig,
+    mu_speed_slope: float = 0.0,
 ) -> torch.Tensor:
     """The ground-roll force balance given already-evaluated inputs; the one
-    place the equation of motion is written down."""
+    place the equation of motion is written down.
+
+    mu_speed_slope != 0 makes rolling friction grow with ground speed,
+    mu*(1 + k*V). The identification model never uses it: it exists only to
+    inject a known model-form error into synthetic truth (experiment E10)."""
     v_air = torch.clamp(V + headwind, min=0.0)
     q = 0.5 * cfg.rho * v_air**2
     D = q * cfg.S * cfg.CD0 * cd_scale
@@ -126,6 +131,8 @@ def accel_from_inputs(
     # GROUND speed). The legacy scripts applied -mu*N unconditionally, which
     # made the aircraft roll backwards at idle thrust before spool-up; their
     # integrators hid this with a V >= -0.2 clamp that also broke RK4 accuracy.
+    if mu_speed_slope:
+        mu = mu * (1.0 + mu_speed_slope * V)
     rolling = mu * N * torch.tanh(V / cfg.FRICTION_SMOOTH_V)
 
     return (T - D - rolling - cfg.W * torch.sin(gamma)) / cfg.m

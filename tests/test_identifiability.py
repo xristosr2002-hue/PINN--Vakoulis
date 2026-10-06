@@ -152,9 +152,11 @@ def test_slide_kappa_invariant_holds_until_liftoff():
     assert float((x1 - x0).abs().max()) < 1e-3
 
 
-def test_slide_lift_unloading_separates_mu_from_eta():
+def test_slide_lift_unloading_decorrelates_mu_eta_sensitivities():
     """At S = 5 m^2 lift unloads the wheels during the run, so mu*N varies in
-    time while eta*T is ~flat: corr(mu, eta) drops from -0.9999 (v1) to ~-0.87."""
+    time while eta*T is ~flat: the *sensitivity-column* correlation of (mu, eta)
+    drops from -0.9999 (v1) to ~-0.87. (The parameter *estimates* of mu, c_D,
+    eta stay strongly correlated along a joint thrust-vs-resistance valley.)"""
     t = np.linspace(0.0, SLIDE.TF, 160)
     S, names = sensitivity_matrix(THETA, t, SLIDE, ParamSpace(), {"v": 13.0, "x": 113.0})
     rep = identifiability_report(S, names)

@@ -90,6 +90,10 @@ class DataConfig:
     # weight-on-wheels switch or 50 fps video times to ~0.02 s.
     observe_liftoff: bool = True
     sigma_t_liftoff: float = 0.02  # s
+    # Model-form error injected into the synthetic TRUTH only (E10): rolling
+    # friction mu*(1 + k*V), k in 1/(m/s). The identification model keeps a
+    # constant mu. 0 = well-specified ("inverse crime") benchmark.
+    truth_mu_speed_slope: float = 0.0
 
 
 @dataclass
@@ -166,6 +170,20 @@ class ExperimentConfig:
     @property
     def run_dir(self) -> str:
         return os.path.join(self.out_dir, self.name)
+
+    @classmethod
+    def load(cls, path: str) -> "ExperimentConfig":
+        """Rebuild a run's configuration from its saved config.json."""
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+        sections = {"physics": PhysicsConfig, "truth": TrueParams, "space": ParamSpace,
+                    "data": DataConfig, "train": TrainConfig, "uq": UQConfig}
+        kwargs = {k: v for k, v in blob.items() if k not in sections}
+        for key, klass in sections.items():
+            if key in blob:
+                fields = {f: tuple(v) if isinstance(v, list) else v for f, v in blob[key].items()}
+                kwargs[key] = klass(**fields)
+        return cls(**kwargs)
 
     def save(self) -> str:
         os.makedirs(self.run_dir, exist_ok=True)
