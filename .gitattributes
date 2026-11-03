@@ -1,0 +1,6 @@
+# Store text with LF in the repository; the working tree follows local settings.
+* text=auto
+
+*.pt binary
+*.png binary
+*.pdf binary
