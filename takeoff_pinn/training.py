@@ -20,6 +20,7 @@ from .identifiability import (event_sensitivity, identifiability_report, kappa_g
 from .losses import compute_loss, huber_mean
 from .model import TakeoffPINN
 from .oe import output_error_fit
+from .provenance import save_provenance
 from .uq import propagate_uncertainty
 
 
@@ -186,6 +187,7 @@ def run_experiment(exp: ExperimentConfig) -> dict:
     torch.set_default_dtype(torch.float64)
     seed_everything(exp.train.seed)
     exp.save()
+    save_provenance(exp.run_dir)  # git commit + environment of this run
 
     data = (load_csv(exp.data_csv) if exp.data_csv
             else make_synthetic_data(exp.physics, exp.truth, exp.data, exp.train.seed))

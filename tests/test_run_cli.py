@@ -14,5 +14,5 @@ def test_cli_quick_run_writes_figures(tmp_path):
     assert rc == 0
     run_dir = os.path.join(str(tmp_path), "cli_smoke")
     for fname in ("states.png", "residuals.png", "parameters.png", "uq.png",
-                  "metrics.json", "config.json"):
+                  "metrics.json", "config.json", "provenance.json"):
         assert os.path.exists(os.path.join(run_dir, fname)), fname
