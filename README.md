@@ -68,7 +68,7 @@ not comparable to sequential runs (results are statistically, not bitwise, ident
 | `tests/` | pytest suite (physics hand checks, RK4 order, invariants, covariance honesty, smoke runs) |
 | `scripts/` | multi-seed harness, OE Monte-Carlo |
 | `experiments/` | `LOG.md` (change log), per-experiment configs/metrics/summaries |
-| `thesis/` | thesis generator sources (v2 copy) |
+
 
 ## Reproducibility
 
